@@ -681,13 +681,8 @@ export const getActiveDelivery = async (req, res) => {
     }
 
     const rider = await prisma.riderProfile.findUnique({
-      where: {
-        userId,
-      },
-      select: {
-        id: true,
-        userId: true,
-      },
+      where: { userId },
+      select: { id: true, userId: true },
     });
 
     if (!rider) {
@@ -712,9 +707,7 @@ export const getActiveDelivery = async (req, res) => {
             latitude: true,
             longitude: true,
             user: {
-              select: {
-                phone: true,
-              },
+              select: { phone: true },
             },
           },
         },
@@ -731,9 +724,10 @@ export const getActiveDelivery = async (req, res) => {
       },
     });
 
-    // Check if payment is successful
-    const payment = activeDelivery?.payments?.[0];
-    const isPaid = payment?.status === "SUCCESS";
+    // ✅ FIXED: Check if ANY payment record is SUCCESS, fallback to the latest if needed
+    const successfulPayment = activeDelivery?.payments?.find(p => p.status === "SUCCESS");
+    const payment = successfulPayment || activeDelivery?.payments?.[0];
+    const isPaid = !!successfulPayment;
 
     // If payment is not completed, redact full pickup details to ensure UX safety
     let sanitizedDelivery = activeDelivery;
@@ -745,9 +739,7 @@ export const getActiveDelivery = async (req, res) => {
           businessAddress: "Exact address unlocks after payment verification.",
           latitude: null,
           longitude: null,
-          user: {
-            phone: null,
-          },
+          user: { phone: null },
         },
         recipientName: "Restricted",
         recipientAddress: "Restricted until payment is confirmed",
@@ -763,7 +755,6 @@ export const getActiveDelivery = async (req, res) => {
     });
   } catch (error) {
     console.error("Get active delivery error:", error);
-
     return res.status(500).json({
       success: false,
       message: "Failed to fetch active delivery.",
