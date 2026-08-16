@@ -1,6 +1,7 @@
 import axios from "axios";
 import crypto from "crypto";
 import prisma from "../prismaClient.js";
+import { sendWhatsAppMessage } from "../utils/whatsappCloudService.js";
 
 // =====================================================
 // PAYSTACK CONFIG
@@ -339,6 +340,26 @@ export const verifyDeliveryPayment = async (req, res) => {
 
       return { updatedPayment };
     });
+
+    // ─────────────────────────────────────────────
+    // SEND WHATSAPP NOTIFICATION TO RECIPIENT
+    // ─────────────────────────────────────────────
+    const delivery = payment.delivery;
+    if (delivery && delivery.recipientPhone && delivery.trackingId) {
+      const siteUrl = process.env.FRONTEND_URL || "https://courierx.vercel.app";
+      const trackingLink = `${siteUrl}/track/${delivery.trackingId}`;
+
+      const whatsappMessage = 
+        `Hello ${delivery.recipientName || "Customer"}! 👋\n\n` +
+        `Your payment for CourierX delivery (${delivery.trackingId}) was successful! 🎉\n\n` +
+        `You can track your package in real-time here:\n${trackingLink}\n\n` +
+        `Thank you for using CourierX! 🚚`;
+
+      // Trigger asynchronously so it doesn't block the HTTP response
+      sendWhatsAppMessage(delivery.recipientPhone, whatsappMessage).catch((err) => {
+        console.error("Failed to send recipient WhatsApp notification:", err);
+      });
+    }
 
     return res.status(200).json({
       success: true,
