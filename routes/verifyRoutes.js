@@ -1,6 +1,6 @@
 import express from "express";
 import { verifyRiderProfile } from "../controllers/verifyController.js"; 
-import { protect, authorizeRole } from "../middleware/authmiddleware.js"; 
+import { protect, authorizeRole } from "../middleware/authMiddleware.js"; 
 
 const router = express.Router();
 
