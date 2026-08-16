@@ -133,7 +133,7 @@ export const initiateDeliveryPayment = async (req, res) => {
     // 7. PREPARE PAYSTACK PAYLOAD
     const reference = `CXR-${delivery.id}-${Date.now()}`;
     const amountInKobo = Math.round(amount * 100);
-    const callbackUrl = `${ "http://localhost:5173"}/payment/callback`;
+    const callbackUrl = `${ "https://courierx.vercel.app/"}/payment/callback`;
 
     const paystackPayload = {
       email: customerEmail,
