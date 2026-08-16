@@ -1,8 +1,7 @@
 import axios from "axios";
 
-export const sendWhatsAppMessage = async (recipientPhone, messageText) => {
+export const sendWhatsAppTemplateMessage = async (recipientPhone, templateParams) => {
   try {
-    // Format Nigerian phone numbers correctly (e.g., convert 0811... to 234811...)
     let formattedPhone = recipientPhone.toString().trim();
     if (formattedPhone.startsWith("0")) {
       formattedPhone = "234" + formattedPhone.slice(1);
@@ -19,13 +18,26 @@ export const sendWhatsAppMessage = async (recipientPhone, messageText) => {
     }
 
     const response = await axios.post(
-      `https://graph.facebook.com/v17.0/${phoneNumberId}/messages`,
+      `https://graph.facebook.com/v19.0/${phoneNumberId}/messages`, // Updated to a stable version
       {
         messaging_product: "whatsapp",
         to: formattedPhone,
-        type: "text",
-        text: {
-          body: messageText,
+        type: "template",
+        template: {
+          name: "payment_success", // Must match your approved template name in Meta
+          language: {
+            code: "en", // Or your target language code
+          },
+          components: [
+            {
+              type: "body",
+              parameters: [
+                { type: "text", text: templateParams.recipientName },
+                { type: "text", text: templateParams.trackingId },
+                { type: "text", text: templateParams.trackingLink },
+              ],
+            },
+          ],
         },
       },
       {
@@ -36,7 +48,7 @@ export const sendWhatsAppMessage = async (recipientPhone, messageText) => {
       }
     );
 
-    console.log("WhatsApp message sent successfully:", response.data);
+    console.log("WhatsApp template message sent successfully:", response.data);
     return response.data;
   } catch (error) {
     console.error(
