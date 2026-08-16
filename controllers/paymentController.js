@@ -248,7 +248,6 @@ export const initiateDeliveryPayment = async (req, res) => {
 
 export const verifyDeliveryPayment = async (req, res) => {
   try {
-    // ✅ Safe extraction matching your other controllers
     const userId = req.user?.userId || req.user?.id;
     const { reference } = req.params;
 
@@ -305,7 +304,7 @@ export const verifyDeliveryPayment = async (req, res) => {
       return res.status(400).json({ success: false, message: "Payment amount does not match delivery fee" });
     }
 
-    // Execute Transaction: Update Payment & Delivery Status, Clear Notifications, Notify Rider
+    // Execute Transaction: Update Payment Status, Clear Notifications, Notify Rider
     const result = await prisma.$transaction(async (tx) => {
       // 1. Update Payment Status to SUCCESS
       const updatedPayment = await tx.payment.update({
@@ -316,12 +315,6 @@ export const verifyDeliveryPayment = async (req, res) => {
           paidAt: paymentData.paid_at ? new Date(paymentData.paid_at) : new Date(),
           metadata: paymentData,
         },
-      });
-
-      // 1.5 Update Delivery status so rider's active delivery unlocks
-      const updatedDelivery = await tx.delivery.update({
-        where: { id: payment.deliveryId },
-        data: { status: "PAID" }, // Change to match your status flow (e.g., ASSIGNED or PAID)
       });
 
       // 2. Clear vendor payment notification
@@ -351,11 +344,11 @@ export const verifyDeliveryPayment = async (req, res) => {
         });
       }
 
-      return { updatedPayment, updatedDelivery };
+      return { updatedPayment };
     });
 
     // ─────────────────────────────────────────────
-    // SEND WHATSAPP NOTIFICATION TO RECIPIENT (Safeguarded)
+    // SEND WHATSAPP NOTIFICATION TO RECIPIENT
     // ─────────────────────────────────────────────
     const delivery = payment.delivery;
     if (delivery && delivery.recipientPhone && delivery.trackingId) {
@@ -368,14 +361,10 @@ export const verifyDeliveryPayment = async (req, res) => {
         `You can track your package in real-time here:\n${trackingLink}\n\n` +
         `Thank you for using CourierX! 🚚`;
 
-      // Make sure sendWhatsAppMessage is imported at the top of your file, 
-      // or wrapped safely to prevent crashes if undefined:
       if (typeof sendWhatsAppMessage === "function") {
         sendWhatsAppMessage(delivery.recipientPhone, whatsappMessage).catch((err) => {
           console.error("Failed to send recipient WhatsApp notification:", err);
         });
-      } else {
-        console.warn("sendWhatsAppMessage function is not defined or imported.");
       }
     }
 
