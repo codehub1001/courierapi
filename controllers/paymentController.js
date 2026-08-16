@@ -1,7 +1,6 @@
 import axios from "axios";
 import crypto from "crypto";
 import prisma from "../prismaClient.js";
-import { sendWhatsAppMessage } from "../utils/whatsappCloudService.js";
 
 // =====================================================
 // PAYSTACK CONFIG
@@ -300,8 +299,9 @@ export const verifyDeliveryPayment = async (req, res) => {
       return res.status(400).json({ success: false, message: "Payment amount does not match delivery fee" });
     }
 
-    // Execute Transaction & precisely remove the notification for this delivery
+    // Execute Transaction: Update Payment, Update Delivery Status, and Clear Notifications
     const result = await prisma.$transaction(async (tx) => {
+      // 1. Update Payment Status
       const updatedPayment = await tx.payment.update({
         where: { id: payment.id },
         data: {
@@ -312,6 +312,17 @@ export const verifyDeliveryPayment = async (req, res) => {
         },
       });
 
+      // 2. Update Delivery Record (Fixes the pending status on the rider side)
+      const updatedDelivery = await tx.delivery.update({
+        where: { id: payment.delivery.id },
+        data: {
+          isPaid: true,
+          paymentStatus: "SUCCESS",
+          status: "PAID", // Updates delivery status so the rider interface registers it as paid
+        },
+      });
+
+      // 3. Clear vendor payment notification
       const trackingId = payment.delivery?.trackingId;
       const deleteConditions = [];
       if (trackingId) deleteConditions.push({ message: { contains: trackingId } });
@@ -326,7 +337,7 @@ export const verifyDeliveryPayment = async (req, res) => {
         });
       }
 
-      // Notify Rider
+      // 4. Notify Rider In-App
       if (payment.delivery?.rider) {
         await tx.notification.create({
           data: {
@@ -338,7 +349,7 @@ export const verifyDeliveryPayment = async (req, res) => {
         });
       }
 
-      return { updatedPayment };
+      return { updatedPayment, updatedDelivery };
     });
 
     // ─────────────────────────────────────────────
@@ -366,6 +377,7 @@ export const verifyDeliveryPayment = async (req, res) => {
       message: "Payment verified successfully",
       paymentStatus: "SUCCESS",
       payment: result.updatedPayment,
+      delivery: result.updatedDelivery,
     });
   } catch (error) {
     console.error("🚨 [PAYSTACK VERIFY ERROR]:", error.response?.data || error.message);
