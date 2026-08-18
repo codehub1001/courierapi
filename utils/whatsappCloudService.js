@@ -1,6 +1,6 @@
 import axios from "axios";
 
-export const sendWhatsAppTemplateMessage = async (recipientPhone, templateParams) => {
+export const sendWhatsAppMessage = async (recipientPhone, templateParams) => {
   try {
     let formattedPhone = recipientPhone.toString().trim();
     if (formattedPhone.startsWith("0")) {
