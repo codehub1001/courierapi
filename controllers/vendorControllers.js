@@ -1658,9 +1658,21 @@ export const getVendorHistory = async (req, res) => {
 export const cancelVendorDelivery = async (req, res) => {
   try {
     const { id: deliveryId } = req.params;
-    const vendorId = req.user.id; // Assumes your auth middleware attaches the user object
+    const userId = req.user.id; // From auth middleware
 
-    // 1. Fetch the delivery and verify it belongs to this vendor
+    // 1. Find the VendorProfile belonging to this user
+    const vendorProfile = await prisma.vendorProfile.findUnique({
+      where: { userId: userId },
+    });
+
+    if (!vendorProfile) {
+      return res.status(403).json({
+        success: false,
+        message: "Vendor profile not found for this user account.",
+      });
+    }
+
+    // 2. Fetch the delivery
     const delivery = await prisma.delivery.findUnique({
       where: { id: deliveryId },
       include: { rider: true },
@@ -1673,15 +1685,15 @@ export const cancelVendorDelivery = async (req, res) => {
       });
     }
 
-    // Check ownership (adjust field name if your schema uses storeId or vendorProfileId)
-    if (delivery.vendorId !== vendorId && delivery.userId !== vendorId) {
+    // 3. Check ownership using the VendorProfile ID
+    if (delivery.vendorId !== vendorProfile.id) {
       return res.status(403).json({
         success: false,
         message: "Unauthorized to cancel this delivery.",
       });
     }
 
-    // 2. Validate if delivery can still be cancelled
+    // 4. Validate if delivery status allows cancellation
     const nonCancellableStatuses = ["DELIVERED", "COMPLETED", "CANCELLED", "IN_TRANSIT"];
     if (nonCancellableStatuses.includes(delivery.status?.toUpperCase())) {
       return res.status(400).json({
@@ -1690,20 +1702,18 @@ export const cancelVendorDelivery = async (req, res) => {
       });
     }
 
-    // 3. Perform the cancellation update in a transaction or direct update
+    // 5. Perform the update
     const updatedDelivery = await prisma.delivery.update({
       where: { id: deliveryId },
       data: {
         status: "CANCELLED",
-        // If your schema tracks cancellation metadata or reason:
-        // cancellationReason: req.body.reason || "Cancelled by vendor",
       },
     });
 
-    // Optional: Create an in-app notification for the vendor/rider logs
+    // 6. Create notification
     await prisma.notification.create({
       data: {
-        userId: vendorId,
+        userId: userId,
         title: "Delivery Cancelled",
         message: `Delivery with tracking ID ${delivery.trackingId || deliveryId} has been successfully cancelled.`,
         type: "DELIVERY",
