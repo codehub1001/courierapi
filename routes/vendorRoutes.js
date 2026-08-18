@@ -8,10 +8,11 @@ import {
   getVendorDeliveryById,
   getDeliveryAssignment,
   updateVendorProfile,
-  getVendorHistory
+  getVendorHistory,
+  cancelVendorDelivery // 1. Import the controller here
 } from "../controllers/vendorControllers.js";
 
-import { protect,authorizeRole } from "../middleware/authMiddleware.js";
+import { protect, authorizeRole } from "../middleware/authMiddleware.js";
 
 const router = express.Router();
 
@@ -21,20 +22,8 @@ const router = express.Router();
 |--------------------------------------------------------------------------
 */
 
-// Get logged-in vendor profile
-router.get(
-  "/profile",
-  protect,
-  getVendorProfile
-);
-
-// Update logged-in vendor profile
-router.put(
-  "/profile",
-  protect,
-  updateVendorProfile
-);
-
+router.get("/profile", protect, getVendorProfile);
+router.put("/profile", protect, updateVendorProfile);
 
 /*
 |--------------------------------------------------------------------------
@@ -42,13 +31,7 @@ router.put(
 |--------------------------------------------------------------------------
 */
 
-// Get vendor dashboard overview
-router.get(
-  "/overview",
-  protect,
-  getVendorOverview
-);
-
+router.get("/overview", protect, getVendorOverview);
 
 /*
 |--------------------------------------------------------------------------
@@ -56,31 +39,14 @@ router.get(
 |--------------------------------------------------------------------------
 */
 
-// Create a new delivery
-router.post(
-  "/deliveries",
-  protect,
-  createDelivery
-);
+router.post("/deliveries", protect, createDelivery);
+router.get("/deliveries", protect, getVendorDeliveries);
+router.get("/deliveries/:id", protect, getVendorDeliveryById);
+router.get("/deliveries/:id/assignment", protect, getDeliveryAssignment);
 
-// Get all deliveries belonging to logged-in vendor
-router.get(
-  "/deliveries",
-  protect,
-  getVendorDeliveries
-);
+// 2. Add the cancel delivery route here
+router.patch("/deliveries/:id/cancel", protect, cancelVendorDelivery);
 
-// Get one specific delivery
-router.get(
-  "/deliveries/:id",
-  protect,
-  getVendorDeliveryById
-);
-router.get(
-  "/deliveries/:id/assignment",
-  protect,
-  getDeliveryAssignment
-);
 router.get('/history', protect, getVendorHistory);
 
 export default router;

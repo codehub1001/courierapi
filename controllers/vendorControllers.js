@@ -1655,3 +1655,72 @@ export const getVendorHistory = async (req, res) => {
     });
   }
 };
+export const cancelVendorDelivery = async (req, res) => {
+  try {
+    const { id: deliveryId } = req.params;
+    const vendorId = req.user.id; // Assumes your auth middleware attaches the user object
+
+    // 1. Fetch the delivery and verify it belongs to this vendor
+    const delivery = await prisma.delivery.findUnique({
+      where: { id: deliveryId },
+      include: { rider: true },
+    });
+
+    if (!delivery) {
+      return res.status(404).json({
+        success: false,
+        message: "Delivery not found.",
+      });
+    }
+
+    // Check ownership (adjust field name if your schema uses storeId or vendorProfileId)
+    if (delivery.vendorId !== vendorId && delivery.userId !== vendorId) {
+      return res.status(403).json({
+        success: false,
+        message: "Unauthorized to cancel this delivery.",
+      });
+    }
+
+    // 2. Validate if delivery can still be cancelled
+    const nonCancellableStatuses = ["DELIVERED", "COMPLETED", "CANCELLED", "IN_TRANSIT"];
+    if (nonCancellableStatuses.includes(delivery.status?.toUpperCase())) {
+      return res.status(400).json({
+        success: false,
+        message: `Delivery cannot be cancelled because its current status is ${delivery.status}.`,
+      });
+    }
+
+    // 3. Perform the cancellation update in a transaction or direct update
+    const updatedDelivery = await prisma.delivery.update({
+      where: { id: deliveryId },
+      data: {
+        status: "CANCELLED",
+        // If your schema tracks cancellation metadata or reason:
+        // cancellationReason: req.body.reason || "Cancelled by vendor",
+      },
+    });
+
+    // Optional: Create an in-app notification for the vendor/rider logs
+    await prisma.notification.create({
+      data: {
+        userId: vendorId,
+        title: "Delivery Cancelled",
+        message: `Delivery with tracking ID ${delivery.trackingId || deliveryId} has been successfully cancelled.`,
+        type: "DELIVERY",
+      },
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Delivery cancelled successfully.",
+      data: updatedDelivery,
+    });
+  } catch (error) {
+    console.error("Error cancelling delivery:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error while cancelling delivery.",
+      error: error.message,
+    });
+  }
+};
