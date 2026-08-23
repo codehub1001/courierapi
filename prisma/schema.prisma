@@ -258,6 +258,8 @@ model Delivery {
   packageType          String
   packageWeight        String?
   deliveryInstructions String?
+  notified500m         Boolean  @default(false)
+  notifiedArrived      Boolean  @default(false)
 
   // DELIVERY PRICING
   riderFee    Float?

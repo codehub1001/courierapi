@@ -1,4 +1,5 @@
 import prisma from "../prismaClient.js";
+import { processDeliveryGeofences } from "../service/geofenceService.js";
 
 // ─────────────────────────────────────────────
 // 1. GET RIDER PROFILE & STATS
@@ -208,6 +209,13 @@ export const updateLocation = async (req, res) => {
         currentLongitude: true,
         lastLocationUpdate: true,
       },
+    });
+
+    // ─────────────────────────────────────────────
+    // TRIGGER GEOFENCE EVALUATION (NON-BLOCKING)
+    // ─────────────────────────────────────────────
+    processDeliveryGeofences(rider.id, parsedLatitude, parsedLongitude).catch((err) => {
+      console.error("Geofence execution failed in background:", err);
     });
 
     return res.status(200).json({
