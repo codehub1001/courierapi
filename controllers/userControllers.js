@@ -2,6 +2,12 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import prisma from "../prismaClient.js";
 import { generateShortCode } from "../utils/generator.js";
+import { Resend } from "resend";
+const resendClient = new Resend(process.env.RESEND_API_KEY);
+
+export const getResend = () => {
+  return resendClient;
+};
 
 export const registerUser = async (req, res) => {
   try {
@@ -19,14 +25,7 @@ export const registerUser = async (req, res) => {
       deliveryArea,
     } = req.body;
 
-    if (
-      !fullName ||
-      !username ||
-      !email ||
-      !phone ||
-      !password ||
-      !role
-    ) {
+    if (!fullName || !username || !email || !phone || !password || !role) {
       return res.status(400).json({
         success: false,
         message: "Please provide all required fields",
@@ -65,10 +64,7 @@ export const registerUser = async (req, res) => {
 
     const existingUser = await prisma.user.findFirst({
       where: {
-        OR: [
-          { email: normalizedEmail },
-          { username: normalizedUsername },
-        ],
+        OR: [{ email: normalizedEmail }, { username: normalizedUsername }],
       },
     });
 
@@ -204,14 +200,11 @@ export const loginUser = async (req, res) => {
       });
     }
 
-    // PENDING status check removed for both riders and vendors 
+    // PENDING status check removed for both riders and vendors
     // so they can log in freely without verification bottlenecks.
     // If you only want to enforce pending checks for specific roles (e.g., ADMIN), add them here.
 
-    const isPasswordCorrect = await bcrypt.compare(
-      password,
-      user.password
-    );
+    const isPasswordCorrect = await bcrypt.compare(password, user.password);
 
     if (!isPasswordCorrect) {
       return res.status(401).json({
@@ -229,7 +222,7 @@ export const loginUser = async (req, res) => {
       process.env.JWT_SECRET,
       {
         expiresIn: "7d",
-      }
+      },
     );
 
     return res.status(200).json({
@@ -287,7 +280,10 @@ export const changePassword = async (req, res) => {
       });
     }
 
-    const isPasswordCorrect = await bcrypt.compare(currentPassword, user.password);
+    const isPasswordCorrect = await bcrypt.compare(
+      currentPassword,
+      user.password,
+    );
     if (!isPasswordCorrect) {
       return res.status(401).json({
         success: false,
@@ -314,6 +310,7 @@ export const changePassword = async (req, res) => {
     });
   }
 };
+
 export const forgotPassword = async (req, res) => {
   try {
     const { email } = req.body;
@@ -326,12 +323,20 @@ export const forgotPassword = async (req, res) => {
     }
 
     const normalizedEmail = email.trim().toLowerCase();
+
+    console.log(
+      `🔍 [Forgot Password] Processing request for: "${normalizedEmail}"`,
+    );
+
     const user = await prisma.user.findUnique({
       where: { email: normalizedEmail },
     });
 
-    // For security, don't reveal if the email exists or not, but return success message
+    // Security: Don't reveal if the email exists, but return a success message
     if (!user) {
+      console.warn(
+        `🛡️ [Security] Password reset requested for non-existent email: ${normalizedEmail}`,
+      );
       return res.status(200).json({
         success: true,
         message: "If that email exists, a password reset link has been sent.",
@@ -339,25 +344,67 @@ export const forgotPassword = async (req, res) => {
     }
 
     // Generate a secure reset token valid for 15 minutes
-    const resetToken = jwt.sign(
-      { id: user.id },
-      process.env.JWT_SECRET,
-      { expiresIn: "15m" }
+    const resetToken = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
+      expiresIn: "15m",
+    });
+
+    const resetLink = `${process.env.FRONTEND_URL || "https://courierx.vercel.app/"}/reset-password?token=${resetToken}`;
+
+    console.log("📧 [Forgot Password] Retrieving Resend instance...");
+    const resend = getResend();
+
+    console.log(
+      `🛫 [Forgot Password] Dispatching secure reset link to: ${user.email}...`,
     );
 
-    const resetLink = `${process.env.FRONTEND_URL || "http://localhost:5173"}/reset-password?token=${resetToken}`;
-
-    // TODO: Plug in your email service (e.g., Nodemailer, SendGrid, Resend) to send `resetLink`
-    console.log("Password Reset Link:", resetLink);
+    try {
+      await resend.emails.send({
+        from: "CourierX Security <security@resend.dev>", // Update domain when going live
+        to: user.email,
+        subject: "Reset your CourierX password",
+        html: `
+          <div style="font-family: system-ui, -apple-system, sans-serif; max-width: 480px; margin: 0 auto; padding: 32px; border: 1px solid #e2e8f0; border-radius: 24px; background-color: #ffffff;">
+            <div style="margin-bottom: 24px;">
+              <span style="background-color: #fff7ed; color: #f97316; padding: 8px 12px; border-radius: 9999px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;">Account Security</span>
+            </div>
+            
+            <h2 style="color: #0f172a; font-size: 24px; font-weight: 800; letter-spacing: -0.02em; margin-bottom: 8px;">Reset Your Password</h2>
+            
+            <p style="color: #475569; font-size: 15px; line-height: 1.5; margin-bottom: 24px;">
+              We received a request to reset the password for your CourierX account. Click the button below to set up a new password:
+            </p>
+            
+            <div style="text-align: left; margin-bottom: 24px;">
+              <a href="${resetLink}" style="background-color: #f97316; color: #000000; padding: 14px 28px; text-decoration: none; border-radius: 12px; font-size: 16px; font-weight: 700; display: inline-block; box-shadow: 0 4px 6px -1px rgba(249, 115, 22, 0.2);">
+                Reset Password
+              </a>
+            </div>
+            
+            <p style="color: #64748b; font-size: 13px; line-height: 1.5; margin-bottom: 24px;">
+              Or copy and paste this link into your browser:<br/>
+              <a href="${resetLink}" style="color: #f97316; word-break: break-all;">${resetLink}</a>
+            </p>
+            
+            <hr style="border: none; border-top: 1px solid #e2e8f0; margin-bottom: 24px;" />
+            
+            <p style="color: #94a3b8; font-size: 12px; line-height: 1.5;">
+              This link is strictly confidential and will expire in exactly 15 minutes. If you didn't initiate this request, you can safely ignore this email and your password will remain unchanged.
+            </p>
+          </div>
+        `,
+      });
+      console.log("🎉 [Forgot Password] Email dispatched successfully.");
+    } catch (emailError) {
+      console.error("❌ [Forgot Password] Resend API failed:", emailError);
+      throw emailError; // Let the catch block below handle the 500 response
+    }
 
     return res.status(200).json({
       success: true,
-      message: "Password reset link sent to email",
-      // Include token here temporarily for testing if you haven't wired up an email service yet:
-      // debugToken: resetToken 
+      message: "If that email exists, a password reset link has been sent.",
     });
   } catch (error) {
-    console.error("Forgot password error:", error);
+    console.error("💥 [CRITICAL CRASH] Forgot password error:", error);
     return res.status(500).json({
       success: false,
       message: "Server error during password recovery request",
