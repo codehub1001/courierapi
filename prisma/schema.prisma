@@ -249,6 +249,12 @@ model Delivery {
   recipientPhone   String
   recipientAddress String
 
+  // COORDINATES FOR ROUTING & MAPS
+  pickupLatitude     Float?
+  pickupLongitude    Float?
+  recipientLatitude  Float?
+  recipientLongitude Float?
+
   packageType          String
   packageWeight        String?
   deliveryInstructions String?
@@ -263,7 +269,7 @@ model Delivery {
 
   deliveryRequests DeliveryRequest[]
 
-  payments Payment[]
+  payments       Payment[]
   supportTickets SupportTicket[]
 
   createdAt DateTime @default(now())
