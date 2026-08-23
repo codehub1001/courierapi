@@ -212,24 +212,20 @@ export const createDelivery = async (req, res) => {
     } = req.body;
 
     // =====================================================
-    // VALIDATE DELIVERY DATA
+    // 1. VALIDATE DELIVERY DATA
     // =====================================================
-
     if (
       !recipientName?.trim() ||
       !recipientPhone?.trim() ||
       !recipientAddress?.trim() ||
       !packageType?.trim()
     ) {
-      console.log(
-        "❌ Validation Error: Missing required fields",
-        {
-          recipientName,
-          recipientPhone,
-          recipientAddress,
-          packageType,
-        }
-      );
+      console.log("❌ Validation Error: Missing required fields", {
+        recipientName,
+        recipientPhone,
+        recipientAddress,
+        packageType,
+      });
 
       return res.status(400).json({
         success: false,
@@ -239,15 +235,11 @@ export const createDelivery = async (req, res) => {
     }
 
     // =====================================================
-    // FIND VENDOR
+    // 2. FIND VENDOR
     // =====================================================
-
-    const vendor =
-      await prisma.vendorProfile.findUnique({
-        where: {
-          userId: req.user.id,
-        },
-      });
+    const vendor = await prisma.vendorProfile.findUnique({
+      where: { userId: req.user.id },
+    });
 
     if (!vendor) {
       console.log(
@@ -262,13 +254,10 @@ export const createDelivery = async (req, res) => {
     }
 
     // =====================================================
-    // VALIDATE BUSINESS ADDRESS
+    // 3. VALIDATE BUSINESS ADDRESS
     // =====================================================
-
     if (!vendor.businessAddress?.trim()) {
-      console.log(
-        "❌ Vendor Error: Business address is missing."
-      );
+      console.log("❌ Vendor Error: Business address is missing.");
 
       return res.status(400).json({
         success: false,
@@ -278,17 +267,11 @@ export const createDelivery = async (req, res) => {
     }
 
     // =====================================================
-    // GEOCODE PICKUP LOCATION
+    // 4. GEOCODE PICKUP LOCATION
     // =====================================================
+    console.log("📍 Geocoding vendor address:", vendor.businessAddress);
 
-    console.log(
-      "📍 Geocoding vendor address:",
-      vendor.businessAddress
-    );
-
-    let pickupLocation = await geocodeAddress(
-      vendor.businessAddress
-    );
+    let pickupLocation = await geocodeAddress(vendor.businessAddress);
 
     if (!pickupLocation) {
       console.log(
@@ -298,24 +281,29 @@ export const createDelivery = async (req, res) => {
       pickupLocation = {
         latitude: vendor.latitude || 6.5244,
         longitude: vendor.longitude || 3.3792,
+        isApproximate: true,
       };
     }
 
+    // Update vendor profile coordinates if missing
+    if (!vendor.latitude || !vendor.longitude) {
+      await prisma.vendorProfile.update({
+        where: { id: vendor.id },
+        data: {
+          latitude: pickupLocation.latitude,
+          longitude: pickupLocation.longitude,
+        },
+      });
+    }
+
     // =====================================================
-    // GEOCODE DROPOFF LOCATION
+    // 5. GEOCODE DROPOFF LOCATION
     // =====================================================
+    const cleanedRecipientAddress = recipientAddress.trim();
 
-    const cleanedRecipientAddress =
-      recipientAddress.trim();
+    console.log("📍 Geocoding recipient address:", cleanedRecipientAddress);
 
-    console.log(
-      "📍 Geocoding recipient address:",
-      cleanedRecipientAddress
-    );
-
-    let deliveryLocation = await geocodeAddress(
-      cleanedRecipientAddress
-    );
+    let deliveryLocation = await geocodeAddress(cleanedRecipientAddress);
 
     if (!deliveryLocation) {
       console.log(
@@ -325,42 +313,26 @@ export const createDelivery = async (req, res) => {
       deliveryLocation = {
         latitude: 6.4474,
         longitude: 3.4722,
+        isApproximate: true,
       };
     }
 
     // =====================================================
-    // CALCULATE DISTANCE
+    // 6. CALCULATE DISTANCE (HAVERSINE)
     // =====================================================
-
-    const calculateDistance = (
-      latitude1,
-      longitude1,
-      latitude2,
-      longitude2
-    ) => {
+    const calculateDistance = (lat1, lon1, lat2, lon2) => {
       const earthRadius = 6371;
-
-      const latDifference =
-        ((latitude2 - latitude1) * Math.PI) / 180;
-
-      const longitudeDifference =
-        ((longitude2 - longitude1) * Math.PI) / 180;
+      const dLat = ((lat2 - lat1) * Math.PI) / 180;
+      const dLon = ((lon2 - lon1) * Math.PI) / 180;
 
       const a =
-        Math.sin(latDifference / 2) *
-          Math.sin(latDifference / 2) +
-        Math.cos((latitude1 * Math.PI) / 180) *
-          Math.cos((latitude2 * Math.PI) / 180) *
-          Math.sin(longitudeDifference / 2) *
-          Math.sin(longitudeDifference / 2);
+        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos((lat1 * Math.PI) / 180) *
+          Math.cos((lat2 * Math.PI) / 180) *
+          Math.sin(dLon / 2) *
+          Math.sin(dLon / 2);
 
-      const c =
-        2 *
-        Math.atan2(
-          Math.sqrt(a),
-          Math.sqrt(1 - a)
-        );
-
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
       return earthRadius * c;
     };
 
@@ -372,41 +344,29 @@ export const createDelivery = async (req, res) => {
     );
 
     // =====================================================
-    // CALCULATE PRICING
+    // 7. CALCULATE PRICING
     // =====================================================
-
     const BASE_FARE = 1500;
     const SYSTEM_FEE = 600;
     const RATE_PER_KM = 200;
 
-    const distanceCost =
-      distanceKm * RATE_PER_KM;
+    const distanceCost = distanceKm * RATE_PER_KM;
+    const riderFeeRaw = BASE_FARE + distanceCost;
+    const riderFee = Math.ceil(riderFeeRaw / 100) * 100;
 
-    const riderFeeRaw =
-      BASE_FARE + distanceCost;
-
-    const riderFee =
-      Math.ceil(riderFeeRaw / 100) * 100;
-
-    const totalFareRaw =
-      riderFee + SYSTEM_FEE;
-
-    const totalFare =
-      Math.ceil(totalFareRaw / 100) * 100;
+    const totalFareRaw = riderFee + SYSTEM_FEE;
+    const totalFare = Math.ceil(totalFareRaw / 100) * 100;
 
     const pricing = {
-      distanceKm: Number(
-        distanceKm.toFixed(2)
-      ),
+      distanceKm: Number(distanceKm.toFixed(2)),
       riderFee,
       systemFee: SYSTEM_FEE,
       totalFare,
     };
 
     // =====================================================
-    // PRICE CONFIRMATION STAGE
+    // 8. PRICE CONFIRMATION STAGE
     // =====================================================
-
     if (!confirmed) {
       console.log(
         "💰 Price calculated. Waiting for vendor confirmation:",
@@ -420,202 +380,131 @@ export const createDelivery = async (req, res) => {
           "Please confirm the delivery fee before creating the delivery.",
         pricing: {
           totalFare,
+          riderFee,
+          distanceKm: pricing.distanceKm,
         },
       });
     }
 
     // =====================================================
-    // CREATE TRACKING ID
+    // 9. GENERATE TRACKING ID & 4-DIGIT PIN
     // =====================================================
+    const trackingId = `CXR-${Date.now()}-${Math.floor(
+      100 + Math.random() * 900
+    )}`;
 
-    const trackingId =
-      `CXR-${Date.now()}-${Math.floor(
-        100 + Math.random() * 900
-      )}`;
+    const deliveryPin = Math.floor(1000 + Math.random() * 9000).toString();
 
-    // =====================================================
-    // 🔐 GENERATE 4-DIGIT DELIVERY PIN
-    // =====================================================
-
-    const deliveryPin =
-      Math.floor(
-        1000 + Math.random() * 9000
-      ).toString();
-
-    console.log(
-      "🔐 Delivery PIN generated:",
-      deliveryPin
-    );
+    console.log("🔐 Delivery PIN generated:", deliveryPin);
 
     // =====================================================
-    // CREATE DELIVERY
+    // 10. CREATE DELIVERY WITH GEOLOCATION DATA
     // =====================================================
+    const delivery = await prisma.delivery.create({
+      data: {
+        trackingId,
+        vendorId: vendor.id,
 
-    const delivery =
-      await prisma.delivery.create({
-        data: {
-          trackingId,
+        recipientName: recipientName.trim(),
+        recipientPhone: recipientPhone.trim(),
+        recipientAddress: cleanedRecipientAddress,
 
-          vendorId: vendor.id,
+        // 📍 STORED COORDINATES FOR GEOFENCING & ETA CALCULATIONS
+        pickupLatitude: pickupLocation.latitude,
+        pickupLongitude: pickupLocation.longitude,
+        recipientLatitude: deliveryLocation.latitude,
+        recipientLongitude: deliveryLocation.longitude,
 
-          recipientName:
-            recipientName.trim(),
+        packageType: packageType.trim(),
+        packageWeight: packageWeight?.trim() || null,
+        deliveryInstructions: deliveryInstructions?.trim() || null,
 
-          recipientPhone:
-            recipientPhone.trim(),
+        riderFee,
+        deliveryFee: totalFare,
+        deliveryPin,
 
-          recipientAddress:
-            cleanedRecipientAddress,
-
-          packageType:
-            packageType.trim(),
-
-          packageWeight:
-            packageWeight?.trim() || null,
-
-          deliveryInstructions:
-            deliveryInstructions?.trim() ||
-            null,
-
-          // RIDER'S EARNINGS
-          riderFee,
-
-          // VENDOR'S TOTAL PAYMENT
-          deliveryFee: totalFare,
-
-          // 🔐 4-DIGIT COMPLETION PIN
-          deliveryPin,
-
-          status: "PENDING",
-        },
-      });
+        status: "PENDING",
+      },
+    });
 
     // =====================================================
-    // FIND AVAILABLE RIDERS
+    // 11. FIND AVAILABLE RIDERS
     // =====================================================
-
-    const riders =
-      await prisma.riderProfile.findMany({
-        where: {
-          isVerified: true,
-
-          isAvailable: true,
-
-          currentLatitude: {
-            not: null,
-          },
-
-          currentLongitude: {
-            not: null,
-          },
-
-          deliveries: {
-            none: {
-              status: {
-                in: [
-                  "ASSIGNED",
-                  "PICKED_UP",
-                  "IN_TRANSIT",
-                ],
-              },
+    const riders = await prisma.riderProfile.findMany({
+      where: {
+        isVerified: true,
+        isAvailable: true,
+        currentLatitude: { not: null },
+        currentLongitude: { not: null },
+        deliveries: {
+          none: {
+            status: {
+              in: ["ASSIGNED", "PICKED_UP", "IN_TRANSIT"],
             },
           },
         },
-
-        include: {
-          user: {
-            select: {
-              id: true,
-              fullName: true,
-              username: true,
-              phone: true,
-              email: true,
-            },
+      },
+      include: {
+        user: {
+          select: {
+            id: true,
+            fullName: true,
+            username: true,
+            phone: true,
+            email: true,
           },
         },
-      });
+      },
+    });
 
-    // =====================================================
-    // NO RIDERS AVAILABLE
-    // =====================================================
-
+    // Handle no available riders
     if (riders.length === 0) {
       return res.status(201).json({
         success: true,
-
         message:
           "Delivery created successfully, but no available riders were found.",
-
         delivery,
-
-        pricing: {
-          totalFare,
-          riderFee,
-        },
-
+        pricing: { totalFare, riderFee },
         closestRiders: [],
       });
     }
 
     // =====================================================
-    // ADD DISTANCE TO EACH RIDER
+    // 12. SORT RIDERS BY DISTANCE TO PICKUP
     // =====================================================
-
-    const ridersWithDistance =
-      riders
-        .map((rider) => {
-          const distance =
-            calculateDistance(
-              pickupLocation.latitude,
-              pickupLocation.longitude,
-              rider.currentLatitude,
-              rider.currentLongitude
-            );
-
-          return {
-            ...rider,
-
-            distanceFromPickup:
-              distance,
-          };
-        })
-        .sort(
-          (a, b) =>
-            a.distanceFromPickup -
-            b.distanceFromPickup
+    const ridersWithDistance = riders
+      .map((rider) => {
+        const distance = calculateDistance(
+          pickupLocation.latitude,
+          pickupLocation.longitude,
+          rider.currentLatitude,
+          rider.currentLongitude
         );
 
-    // =====================================================
-    // SELECT CLOSEST 5 RIDERS
-    // =====================================================
+        return {
+          ...rider,
+          distanceFromPickup: distance,
+        };
+      })
+      .sort((a, b) => a.distanceFromPickup - b.distanceFromPickup);
 
-    const closestRiders =
-      ridersWithDistance.slice(0, 5);
+    const closestRiders = ridersWithDistance.slice(0, 5);
 
     // =====================================================
-    // CREATE DELIVERY REQUESTS
+    // 13. CREATE DELIVERY REQUESTS
     // =====================================================
-
     await prisma.deliveryRequest.createMany({
       data: closestRiders.map((rider) => ({
         deliveryId: delivery.id,
-
         riderId: rider.id,
-
         status: "PENDING",
-
-        distanceFromPickup:
-          rider.distanceFromPickup,
-
-        expiresAt: new Date(
-          Date.now() +
-            5 * 60 * 1000
-        ),
+        distanceFromPickup: rider.distanceFromPickup,
+        expiresAt: new Date(Date.now() + 5 * 60 * 1000),
       })),
     });
 
     // =====================================================
-    // 🔔 NOTIFY CLOSEST RIDERS
+    // 14. NOTIFY CLOSEST RIDERS
     // =====================================================
     try {
       await Promise.all(
@@ -623,7 +512,9 @@ export const createDelivery = async (req, res) => {
           sendNotification({
             userId: rider.userId,
             title: "New Delivery Available 📦",
-            message: `A new package (${trackingId}) is available near you (${rider.distanceFromPickup.toFixed(1)} km away).`,
+            message: `A new package (${trackingId}) is available near you (${rider.distanceFromPickup.toFixed(
+              1
+            )} km away).`,
             type: "DELIVERY",
           })
         )
@@ -633,82 +524,45 @@ export const createDelivery = async (req, res) => {
     }
 
     // =====================================================
-    // RETURN RESPONSE
+    // 15. RETURN RESPONSE
     // =====================================================
-
     return res.status(201).json({
       success: true,
-
       message:
         "Delivery created successfully. Nearby riders have been notified.",
-
       delivery,
-
       pricing: {
         totalFare,
         riderFee,
       },
-
       pickupLocation,
-
-      ridersNotified:
-        closestRiders.length,
-
-      closestRiders:
-        closestRiders.map((rider) => ({
-          id: rider.id,
-
-          userId: rider.userId,
-
-          user: {
-            id: rider.user.id,
-
-            fullName:
-              rider.user.fullName,
-
-            username:
-              rider.user.username,
-
-            phone:
-              rider.user.phone,
-
-            email:
-              rider.user.email,
-          },
-
-          vehicleNumber:
-            rider.vehicleNumber,
-
-          deliveryArea:
-            rider.deliveryArea,
-
-          isVerified:
-            rider.isVerified,
-
-          isAvailable:
-            rider.isAvailable,
-
-          currentLatitude:
-            rider.currentLatitude,
-
-          currentLongitude:
-            rider.currentLongitude,
-
-          distanceFromPickup:
-            rider.distanceFromPickup,
-        })),
+      deliveryLocation,
+      ridersNotified: closestRiders.length,
+      closestRiders: closestRiders.map((rider) => ({
+        id: rider.id,
+        userId: rider.userId,
+        user: {
+          id: rider.user.id,
+          fullName: rider.user.fullName,
+          username: rider.user.username,
+          phone: rider.user.phone,
+          email: rider.user.email,
+        },
+        vehicleNumber: rider.vehicleNumber,
+        deliveryArea: rider.deliveryArea,
+        isVerified: rider.isVerified,
+        isAvailable: rider.isAvailable,
+        currentLatitude: rider.currentLatitude,
+        currentLongitude: rider.currentLongitude,
+        distanceFromPickup: rider.distanceFromPickup,
+      })),
     });
   } catch (error) {
-    console.error(
-      "❌ Create delivery unhandled error:",
-      error
-    );
+    console.error("❌ Create delivery unhandled error:", error);
 
     return res.status(500).json({
       success: false,
-
-      message:
-        "Failed to create delivery. Please try again later.",
+      message: "Failed to create delivery. Please try again later.",
     });
   }
 };
