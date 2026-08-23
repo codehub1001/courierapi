@@ -257,3 +257,158 @@ export const loginUser = async (req, res) => {
     });
   }
 };
+export const changePassword = async (req, res) => {
+  try {
+    const userId = req.user.id; // Provided by your auth middleware
+    const { currentPassword, newPassword } = req.body;
+
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({
+        success: false,
+        message: "Current password and new password are required",
+      });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: "New password must be at least 6 characters long",
+      });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    const isPasswordCorrect = await bcrypt.compare(currentPassword, user.password);
+    if (!isPasswordCorrect) {
+      return res.status(401).json({
+        success: false,
+        message: "Incorrect current password",
+      });
+    }
+
+    const hashedNewPassword = await bcrypt.hash(newPassword, 10);
+
+    await prisma.user.update({
+      where: { id: userId },
+      data: { password: hashedNewPassword },
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Password changed successfully",
+    });
+  } catch (error) {
+    console.error("Change password error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error during password change",
+    });
+  }
+};
+export const forgotPassword = async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: "Email is required",
+      });
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+    const user = await prisma.user.findUnique({
+      where: { email: normalizedEmail },
+    });
+
+    // For security, don't reveal if the email exists or not, but return success message
+    if (!user) {
+      return res.status(200).json({
+        success: true,
+        message: "If that email exists, a password reset link has been sent.",
+      });
+    }
+
+    // Generate a secure reset token valid for 15 minutes
+    const resetToken = jwt.sign(
+      { id: user.id },
+      process.env.JWT_SECRET,
+      { expiresIn: "15m" }
+    );
+
+    const resetLink = `${process.env.FRONTEND_URL || "http://localhost:5173"}/reset-password?token=${resetToken}`;
+
+    // TODO: Plug in your email service (e.g., Nodemailer, SendGrid, Resend) to send `resetLink`
+    console.log("Password Reset Link:", resetLink);
+
+    return res.status(200).json({
+      success: true,
+      message: "Password reset link sent to email",
+      // Include token here temporarily for testing if you haven't wired up an email service yet:
+      // debugToken: resetToken 
+    });
+  } catch (error) {
+    console.error("Forgot password error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error during password recovery request",
+    });
+  }
+};
+
+export const resetPassword = async (req, res) => {
+  try {
+    const { token, newPassword } = req.body;
+
+    if (!token || !newPassword) {
+      return res.status(400).json({
+        success: false,
+        message: "Token and new password are required",
+      });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: "Password must be at least 6 characters long",
+      });
+    }
+
+    let decoded;
+    try {
+      decoded = jwt.verify(token, process.env.JWT_SECRET);
+    } catch (err) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid or expired password reset token",
+      });
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    await prisma.user.update({
+      where: { id: decoded.id },
+      data: { password: hashedPassword },
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Password has been reset successfully. You can now log in.",
+    });
+  } catch (error) {
+    console.error("Reset password error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error during password reset",
+    });
+  }
+};

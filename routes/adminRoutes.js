@@ -6,7 +6,10 @@ import {
   getAllVendors,
   getAllDeliveries,
   getAdminOverview,
-  getPaymentAnalytics
+  getPaymentAnalytics,
+  adminGetAllVendorsDeliveryHistory,
+  adminGetAllVendorsPaymentHistory,
+  adminGetAllRidersPayoutHistory
 } from "../controllers/adminControllers.js";
 import { protect, authorizeRole } from "../middleware/authMiddleware.js";
 
@@ -35,5 +38,7 @@ router.get(
 
   getPaymentAnalytics
 );
-
+router.get("/vendors/deliveries/history", adminGetAllVendorsDeliveryHistory);
+router.get("/vendors/payments/history", adminGetAllVendorsPaymentHistory);
+router.get("/riders/payouts/history", adminGetAllRidersPayoutHistory);
 export default router;

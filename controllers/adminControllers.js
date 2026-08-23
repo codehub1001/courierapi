@@ -746,3 +746,206 @@ export const getPaymentAnalytics = async (req, res) => {
     });
   }
 };
+// ─────────────────────────────────────────────
+// 7. ADMIN: GET ALL VENDORS DELIVERY HISTORY (COMPLETED & CANCELLED)
+// ─────────────────────────────────────────────
+export const adminGetAllVendorsDeliveryHistory = async (req, res) => {
+  try {
+    const deliveries = await prisma.delivery.findMany({
+      where: {
+        status: {
+          in: ["DELIVERED", "CANCELLED"],
+        },
+      },
+      include: {
+        vendor: {
+          select: {
+            id: true,
+            businessName: true,
+            businessAddress: true,
+            user: {
+              select: {
+                fullName: true,
+                email: true,
+                phone: true,
+              },
+            },
+          },
+        },
+        rider: {
+          include: {
+            user: {
+              select: {
+                fullName: true,
+                phone: true,
+              },
+            },
+          },
+        },
+      },
+      orderBy: {
+        createdAt: "desc",
+      },
+    });
+
+    const completedDeliveries = deliveries.filter((d) => d.status === "DELIVERED");
+    const cancelledDeliveries = deliveries.filter((d) => d.status === "CANCELLED");
+
+    return res.status(200).json({
+      success: true,
+      counts: {
+        total: deliveries.length,
+        completed: completedDeliveries.length,
+        cancelled: cancelledDeliveries.length,
+      },
+      deliveries: {
+        completed: completedDeliveries,
+        cancelled: cancelledDeliveries,
+        all: deliveries,
+      },
+    });
+  } catch (error) {
+    console.error("Error fetching all vendors delivery history:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error while fetching all vendors' delivery history.",
+      error: error.message,
+    });
+  }
+};
+
+// ─────────────────────────────────────────────
+// 8. ADMIN: GET ALL VENDORS PAYMENT HISTORY
+// ─────────────────────────────────────────────
+export const adminGetAllVendorsPaymentHistory = async (req, res) => {
+  try {
+    const paymentRecords = await prisma.delivery.findMany({
+      where: {
+        status: {
+          in: ["DELIVERED", "PAID"],
+        },
+      },
+      select: {
+        id: true,
+        trackingId: true,
+        deliveryFee: true,
+        status: true,
+        createdAt: true,
+        recipientName: true,
+        recipientAddress: true,
+        packageType: true,
+        vendor: {
+          select: {
+            id: true,
+            businessName: true,
+            user: {
+              select: {
+                fullName: true,
+                email: true,
+                wallet: {
+                  select: {
+                    balance: true,
+                    currency: true,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      orderBy: {
+        createdAt: "desc",
+      },
+    });
+
+    const totalRevenue = paymentRecords.reduce(
+      (sum, record) => sum + Number(record.deliveryFee || 0),
+      0
+    );
+
+    return res.status(200).json({
+      success: true,
+      summary: {
+        totalTransactions: paymentRecords.length,
+        totalRevenue,
+      },
+      payments: paymentRecords,
+    });
+  } catch (error) {
+    console.error("Error fetching all vendors payment history:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error while fetching all vendors' payment history.",
+      error: error.message,
+    });
+  }
+};
+// ─────────────────────────────────────────────
+// 9. ADMIN: GET ALL RIDERS PAYOUT & EARNINGS HISTORY
+// ─────────────────────────────────────────────
+export const adminGetAllRidersPayoutHistory = async (req, res) => {
+  try {
+    // Fetch all completed deliveries where riders earned their fees
+    const payoutRecords = await prisma.delivery.findMany({
+      where: {
+        status: "DELIVERED",
+        riderId: { not: null },
+      },
+      select: {
+        id: true,
+        trackingId: true,
+        riderFee: true,
+        status: true,
+        createdAt: true,
+        recipientName: true,
+        rider: {
+          select: {
+            id: true,
+            vehicleNumber: true,
+            bankName: true,
+            accountNumber: true,
+            accountName: true,
+            user: {
+              select: {
+                fullName: true,
+                email: true,
+                phone: true,
+                wallet: {
+                  select: {
+                    balance: true,
+                    currency: true,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      orderBy: {
+        createdAt: "desc",
+      },
+    });
+
+    // Calculate total platform-wide rider payouts generated
+    const totalRiderPayouts = payoutRecords.reduce(
+      (sum, record) => sum + Number(record.riderFee || 0),
+      0
+    );
+
+    return res.status(200).json({
+      success: true,
+      summary: {
+        totalPayoutTransactions: payoutRecords.length,
+        totalRiderPayouts,
+      },
+      payouts: payoutRecords,
+    });
+  } catch (error) {
+    console.error("Error fetching all riders payout history:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error while fetching all riders' payout history.",
+      error: error.message,
+    });
+  }
+};
