@@ -3,10 +3,13 @@ import jwt from "jsonwebtoken";
 import prisma from "../prismaClient.js";
 import { generateShortCode } from "../utils/generator.js";
 import { Resend } from "resend";
-const resendClient = new Resend(process.env.RESEND_API_KEY);
 
 export const getResend = () => {
-  return resendClient;
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) {
+    throw new Error("Missing API key. RESEND_API_KEY is not defined in environment variables.");
+  }
+  return new Resend(apiKey);
 };
 
 export const registerUser = async (req, res) => {

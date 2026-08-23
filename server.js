@@ -16,6 +16,7 @@ import notificationRoutes from "./routes/notificationRoutes.js";
 import verifyRoutes from "./routes/verifyRoutes.js";
 import adminRoutes from "./routes/adminRoutes.js";
 import uploadRoutes from "./routes/uploadRoutes.js"; // 👈 Import upload routes
+import supportRoutes from "./routes/supportRoutes.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -50,6 +51,7 @@ app.use("/api/notifications", notificationRoutes);
 app.use("/api/rider", riderRoutes);
 app.use("/api/upload", uploadRoutes); // 👈 Mount the upload router here
 app.use("/api", verifyRoutes);
+app.use("/api/support", supportRoutes);
 app.get("/", (req, res) => {
   res.json({
     success: true,

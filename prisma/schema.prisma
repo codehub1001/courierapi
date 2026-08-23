@@ -264,6 +264,7 @@ model Delivery {
   deliveryRequests DeliveryRequest[]
 
   payments Payment[]
+  supportTickets SupportTicket[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -433,4 +434,35 @@ model Referral {
 
   @@index([referrerId])
   @@index([status])
+}
+
+enum TicketStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+model SupportTicket {
+  id          String   @id @default(cuid())
+  
+  fullName    String
+  email       String
+  phone       String?
+  
+  // Optional tracking ID string or link to Delivery model
+  trackingId  String?
+  delivery    Delivery? @relation(fields: [trackingId], references: [trackingId], onDelete: SetNull)
+  
+  subject     String
+  message     String
+  
+  status      TicketStatus @default(OPEN)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([email])
+  @@index([status])
+  @@index([trackingId])
 }
