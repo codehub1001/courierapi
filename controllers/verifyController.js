@@ -25,6 +25,7 @@ export const verifyRiderProfile = async (req, res) => {
       return res.status(400).json({ success: false, message: "BVN and NIN must be valid 11-digit numbers." });
     }
 
+    // Fetch existing profile to check stored bank details
     const existingProfile = await prisma.riderProfile.findUnique({ where: { userId } });
     if (!existingProfile) {
       return res.status(404).json({ success: false, message: "Rider profile not found." });
@@ -78,8 +79,6 @@ export const verifyRiderProfile = async (req, res) => {
     } catch (apiError) {
       console.warn("Youverify Sandbox API returned an internal error. Using sandbox dev bypass...", apiError?.response?.data || apiError.message);
       
-      // 💡 SANDBOX BYPASS: If Youverify sandbox is down/crashing, let a test BVN pass 
-      // so you can test your database transactions and frontend flow locally.
       if (bvnNumber === "22222222222" || process.env.NODE_ENV !== "production") {
         verificationPassed = true; 
       } else {
@@ -97,7 +96,21 @@ export const verifyRiderProfile = async (req, res) => {
       });
     }
 
-    // 3. Update Database inside a Transaction if verification succeeds
+    // 3. Cross-check stored bank account name with verified names
+    if (existingProfile.accountName) {
+      const bankNameUpper = existingProfile.accountName.toUpperCase();
+      const firstUpper = firstName.trim().toUpperCase();
+      const lastUpper = lastName.trim().toUpperCase();
+
+      if (!bankNameUpper.includes(firstUpper) || !bankNameUpper.includes(lastUpper)) {
+        return res.status(400).json({
+          success: false,
+          message: `Bank account name (${existingProfile.accountName}) does not match your verified legal names (${firstName} ${lastName}). Please update your bank details to match your identity.`,
+        });
+      }
+    }
+
+    // 4. Update Database inside a Transaction if verification succeeds
     const [updatedRider] = await prisma.$transaction([
       prisma.riderProfile.update({
         where: { userId },
