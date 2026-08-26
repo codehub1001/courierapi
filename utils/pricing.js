@@ -10,7 +10,7 @@ export const calculateDeliveryFee = ({
   distanceInKm = 0,
   isPeakHour = false,
 }) => {
-  const BASE_FARE = 1000;
+  const BASE_FARE = 1500;
   const SYSTEM_FEE = 600;
   const RATE_PER_KM = 200;
 
