@@ -9,49 +9,85 @@ import { processDeliveryGeofences } from "../service/geofenceService.js";
 // ─────────────────────────────────────────────
 // 1. GET RIDER PROFILE & STATS
 // ─────────────────────────────────────────────
-export const getRiderProfile = async (req, res) => {
+export const acceptDeliveryRequest = async (req, res) => {
   try {
-    const rider = await prisma.riderProfile.findUnique({
-      where: { userId: req.user.id },
-      include: {
-        user: {
-          select: {
-            fullName: true,
-            email: true,
-            phone: true,
-            wallet: true,
-          },
-        },
-      },
+    const { requestId } = req.params; // or deliveryId, depending on your route design
+
+    // 1. Find the delivery request and associated delivery
+    const deliveryRequest = await prisma.deliveryRequest.findUnique({
+      where: { id: requestId },
+      include: { delivery: true, rider: true },
     });
 
-    if (!rider) {
+    if (!deliveryRequest) {
       return res.status(404).json({
         success: false,
-        message: "Rider profile not found",
+        message: "Delivery request not found",
       });
     }
 
-    // --- DEBUG LOG: Check what is actually being sent to the frontend ---
-    console.log("SENDING RIDER TO FRONTEND -> isVerified:", rider.isVerified);
+    if (deliveryRequest.status !== "PENDING") {
+      return res.status(400).json({
+        success: false,
+        message: `This delivery request is no longer pending. Status: ${deliveryRequest.status}`,
+      });
+    }
 
-    // Fetch completed deliveries count dynamically
-    const completedDeliveries = await prisma.delivery.count({
-      where: { riderId: rider.id, status: "DELIVERED" },
+    // 2. Perform the acceptance in a transaction to update both the request and the delivery
+    const updatedDelivery = await prisma.$transaction(async (tx) => {
+      // Mark this request as accepted
+      await tx.deliveryRequest.update({
+        where: { id: requestId },
+        data: {
+          status: "ACCEPTED",
+          respondedAt: new Date(),
+        },
+      });
+
+      // Reject other pending requests for this delivery (optional best practice)
+      await tx.deliveryRequest.updateMany({
+        where: {
+          deliveryId: deliveryRequest.deliveryId,
+          id: { not: requestId },
+          status: "PENDING",
+        },
+        data: {
+          status: "EXPIRED",
+        },
+      });
+
+      // Update the parent delivery to ASSIGNED and stamp assignedAt
+      const delivery = await tx.delivery.update({
+        where: { id: deliveryRequest.deliveryId },
+        data: {
+          status: "ASSIGNED",
+          riderId: deliveryRequest.riderId,
+          assignedAt: new Date(), // 👈 THIS STARTS THE 15-MINUTE STALE CLOCK
+        },
+        include: {
+          vendor: {
+            include: { user: { select: { fullName: true, phone: true } } },
+          },
+          rider: {
+            include: { user: { select: { fullName: true, phone: true } } },
+          },
+        },
+      });
+
+      return delivery;
     });
 
     return res.status(200).json({
       success: true,
-      rider: {
-        ...rider,
-        completedDeliveries,
-      },
+      message: "Delivery accepted successfully",
+      delivery: updatedDelivery,
     });
   } catch (error) {
-    console.error("Get rider profile error:", error);
+    console.error("❌ ACCEPT DELIVERY REQUEST ERROR:", error);
     return res.status(500).json({
       success: false,
-      message: "Failed to fetch rider profile",
+      message: "Failed to accept delivery request",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
 };
