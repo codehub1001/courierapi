@@ -10,7 +10,8 @@ import {
   adminGetAllVendorsDeliveryHistory,
   adminGetAllVendorsPaymentHistory,
   adminGetAllRidersPayoutHistory,
-  adminGetAllRidersWithdrawalHistory
+  adminGetAllRidersWithdrawalHistory,
+  getUnpaidAssignedDeliveries
 } from "../controllers/adminControllers.js";
 import { protect, authorizeRole } from "../middleware/authMiddleware.js";
 
@@ -39,6 +40,7 @@ router.get(
 
   getPaymentAnalytics
 );
+router.get("/deliveries/unpaid-stale", getUnpaidAssignedDeliveries);
 router.get("/vendors/deliveries/history", adminGetAllVendorsDeliveryHistory);
 router.get("/vendors/payments/history", adminGetAllVendorsPaymentHistory);
 router.get("/riders/payouts/history", adminGetAllRidersPayoutHistory);

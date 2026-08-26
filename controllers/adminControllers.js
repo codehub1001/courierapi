@@ -401,6 +401,72 @@ export const getAllDeliveries = async (req, res) => {
     });
   }
 };
+export const getUnpaidAssignedDeliveries = async (req, res) => {
+  try {
+    // Calculate the timestamp for 15 minutes ago
+    const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000);
+
+    const deliveries = await prisma.delivery.findMany({
+      where: {
+        status: "ASSIGNED",
+        
+        // Ensure it has been in this state for longer than 15 minutes
+        updatedAt: {
+          lte: fifteenMinutesAgo,
+        },
+
+        // Ensure there is no successful payment attached to this delivery
+        payments: {
+          none: {
+            status: "SUCCESS",
+          },
+        },
+      },
+      include: {
+        vendor: {
+          select: {
+            businessName: true,
+            businessAddress: true,
+            user: {
+              select: {
+                fullName: true,
+                phone: true,
+                email: true,
+              },
+            },
+          },
+        },
+        rider: {
+          include: {
+            user: {
+              select: {
+                fullName: true,
+                phone: true,
+                email: true,
+              },
+            },
+          },
+        },
+        payments: true, // Includes payment attempt info for review
+      },
+      orderBy: { updatedAt: "asc" }, // Shows the oldest stale orders first
+    });
+
+    return res.status(200).json({
+      success: true,
+      count: deliveries.length,
+      message: "Fetched assigned deliveries that remain unpaid after 15 minutes.",
+      deliveries,
+    });
+  } catch (error) {
+    console.error("Get unpaid assigned deliveries error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch unpaid assigned deliveries",
+      error: error.message,
+    });
+  }
+};
 // ─────────────────────────────────────────────
 // 6. GET ADMIN OVERVIEW / DASHBOARD STATS
 // ─────────────────────────────────────────────
