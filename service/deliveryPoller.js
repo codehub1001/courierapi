@@ -1,7 +1,6 @@
 import prisma from "../prismaClient.js";
 import { sendNotification } from "../utils/sendNotification.js";
 
-// Haversine distance formula for rider proximity
 const calculateHaversine = (lat1, lon1, lat2, lon2) => {
   const earthRadius = 6371;
   const dLat = ((lat2 - lat1) * Math.PI) / 180;
@@ -19,7 +18,6 @@ export const pollUnassignedDeliveries = async () => {
   try {
     console.log("🔄 Running background poll for unassigned PENDING deliveries...");
 
-    // 1. Find deliveries that are still PENDING and have no rider assigned
     const pendingDeliveries = await prisma.delivery.findMany({
       where: {
         status: "PENDING",
@@ -29,16 +27,27 @@ export const pollUnassignedDeliveries = async () => {
 
     console.log(`📦 Found ${pendingDeliveries.length} total unassigned pending deliveries in DB.`);
 
-    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+    const now = Date.now();
+    const fiveMinutesAgo = new Date(now - 5 * 60 * 1000);
+    const maxExpirationAge = new Date(now - 45 * 60 * 1000); // Stop broadcasting after 45 mins
 
     for (const delivery of pendingDeliveries) {
-      console.log(`🔍 Checking Delivery ID: ${delivery.id} (${delivery.trackingId}) | CreatedAt: ${delivery.createdAt}`);
+      const createdAt = new Date(delivery.createdAt);
 
-      // Check if it has been sitting in PENDING for over 5 minutes
-      if (new Date(delivery.createdAt) <= fiveMinutesAgo) {
+      // Stop polling completely if the delivery is older than 45 minutes to prevent infinite loops
+      if (createdAt <= maxExpirationAge) {
+        console.log(`⌛ Delivery ${delivery.trackingId} exceeded max broadcast window. Marking as EXPIRED.`);
+        await prisma.delivery.update({
+          where: { id: delivery.id },
+          data: { status: "EXPIRED" },
+        });
+        continue;
+      }
+
+      if (createdAt <= fiveMinutesAgo) {
         console.log(`⏱️ Delivery ${delivery.trackingId} passed the 5-minute age check.`);
 
-        // 2. Expire any old pending requests for this delivery so they disappear from rider feeds
+        // Expire old pending requests
         await prisma.deliveryRequest.updateMany({
           where: {
             deliveryId: delivery.id,
@@ -49,7 +58,7 @@ export const pollUnassignedDeliveries = async () => {
           },
         });
 
-        // 3. Find available verified riders who DO NOT currently have an active PENDING request for this delivery
+        // Find available verified riders
         const availableRiders = await prisma.riderProfile.findMany({
           where: {
             isVerified: true,
@@ -75,15 +84,13 @@ export const pollUnassignedDeliveries = async () => {
           },
         });
 
-        console.log(`👥 Eligible riders found matching criteria for ${delivery.trackingId}: ${availableRiders.length}`);
-
         if (availableRiders.length === 0) {
           console.log(`⚠️ No new available riders found for delivery ${delivery.trackingId}`);
           continue;
         }
 
-        // 4. Sort riders by distance to pickup location
-        const ridersWithDistance = availableRiders
+        // Sort and slice next batch
+        const nextBatchRiders = availableRiders
           .map((rider) => ({
             ...rider,
             distanceFromPickup: calculateHaversine(
@@ -93,16 +100,12 @@ export const pollUnassignedDeliveries = async () => {
               rider.currentLongitude
             ),
           }))
-          .sort((a, b) => a.distanceFromPickup - b.distanceFromPickup);
+          .sort((a, b) => a.distanceFromPickup - b.distanceFromPickup)
+          .slice(0, 5);
 
-        const nextBatchRiders = ridersWithDistance.slice(0, 5);
+        if (nextBatchRiders.length === 0) continue;
 
-        if (nextBatchRiders.length === 0) {
-          console.log(`⚠️ Batch rider slice resulted in 0 riders for ${delivery.trackingId}`);
-          continue;
-        }
-
-        // 5. Create fresh delivery requests for the next batch with skipDuplicates safety net
+        // Create fresh delivery requests
         await prisma.deliveryRequest.createMany({
           data: nextBatchRiders.map((rider) => ({
             deliveryId: delivery.id,
@@ -114,7 +117,7 @@ export const pollUnassignedDeliveries = async () => {
           skipDuplicates: true,
         });
 
-        // 6. Notify the new batch of riders
+        // Notify riders
         await Promise.all(
           nextBatchRiders.map((rider) =>
             sendNotification({
@@ -128,7 +131,7 @@ export const pollUnassignedDeliveries = async () => {
 
         console.log(`✅ Re-broadcasted delivery ${delivery.trackingId} to ${nextBatchRiders.length} new riders.`);
       } else {
-        console.log(`⏳ Delivery ${delivery.trackingId} is too fresh (created less than 5 mins ago). Skipping.`);
+        console.log(`⏳ Delivery ${delivery.trackingId} is too fresh. Skipping.`);
       }
     }
   } catch (error) {
