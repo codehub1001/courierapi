@@ -737,7 +737,6 @@ export const getVendorDeliveries = async (req, res) => {
     const deliveries = await prisma.delivery.findMany({
       where: {
         vendorId: vendor.id,
-
         status: {
           notIn: ["DELIVERED", "CANCELLED"],
         },
@@ -772,7 +771,10 @@ export const getVendorDeliveries = async (req, res) => {
         deliveryRequests: {
           where: {
             status: "PENDING",
+            expiresAt: { gt: new Date() }, // Ignore expired requests
           },
+
+          take: 5, // 👈 Limits pending requests to match your 5-rider batch limit
 
           include: {
             rider: {
