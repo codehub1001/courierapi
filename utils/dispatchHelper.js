@@ -22,39 +22,69 @@ export const dispatchDeliveryToNearbyRiders = async (delivery) => {
       data: { status: "EXPIRED" },
     });
 
+    // 1. Fetch available riders (we now include their active deliveries to check route proximity programmatically)
     const riders = await prisma.riderProfile.findMany({
       where: {
         isVerified: true,
         isAvailable: true,
         currentLatitude: { not: null },
         currentLongitude: { not: null },
-        deliveries: {
-          none: { status: { in: ["ASSIGNED", "PICKED_UP", "IN_TRANSIT"] } },
-        },
         deliveryRequests: {
           none: { deliveryId: delivery.id },
         },
       },
       include: {
         user: { select: { id: true, fullName: true, phone: true } },
+        deliveries: {
+          where: {
+            status: { in: ["ASSIGNED", "PICKED_UP", "IN_TRANSIT"] },
+          },
+          select: {
+            id: true,
+            status: true,
+            recipientLatitude: true,
+            recipientLongitude: true,
+          },
+        },
       },
     });
 
     if (riders.length === 0) return [];
 
-    const ridersWithDistance = riders
-      .map((rider) => ({
-        ...rider,
-        distanceFromPickup: calculateHaversine(
+    // 2. Filter and calculate distances
+    const processedRiders = riders
+      .map((rider) => {
+        const distanceFromPickup = calculateHaversine(
           delivery.pickupLatitude,
           delivery.pickupLongitude,
           rider.currentLatitude,
           rider.currentLongitude
-        ),
-      }))
+        );
+
+        return {
+          ...rider,
+          distanceFromPickup,
+          hasActiveDelivery: rider.deliveries.length > 0,
+          activeDelivery: rider.deliveries[0] || null,
+        };
+      })
+      .filter((rider) => {
+        // If the rider has NO active delivery, standard proximity applies (e.g., within a reasonable radius like 10km)
+        if (!rider.hasActiveDelivery) {
+          return true; 
+        }
+
+        // If the rider HAS an active delivery, ONLY include them if:
+        // 1. They are extremely close to the new pickup point (e.g., within 2 km of where they are right now)
+        const PROXIMITY_THRESHOLD_KM = 2.0; 
+        
+        return rider.distanceFromPickup <= PROXIMITY_THRESHOLD_KM;
+      })
       .sort((a, b) => a.distanceFromPickup - b.distanceFromPickup);
 
-    const closestRiders = ridersWithDistance.slice(0, 5);
+    const closestRiders = processedRiders.slice(0, 5);
+
+    if (closestRiders.length === 0) return [];
 
     await prisma.deliveryRequest.createMany({
       data: closestRiders.map((rider) => ({
@@ -71,7 +101,9 @@ export const dispatchDeliveryToNearbyRiders = async (delivery) => {
         sendNotification({
           userId: rider.userId,
           title: "New Delivery Available 📦",
-          message: `A new package (${delivery.trackingId}) is available near you (${rider.distanceFromPickup.toFixed(1)} km away).`,
+          message: rider.hasActiveDelivery
+            ? `A nearby delivery is on your current route (${rider.distanceFromPickup.toFixed(1)} km away).`
+            : `A new package (${delivery.trackingId}) is available near you (${rider.distanceFromPickup.toFixed(1)} km away).`,
           type: "DELIVERY",
         })
       )
