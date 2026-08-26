@@ -38,9 +38,12 @@ export const getRoadRoute = async (
 
     const route = data.routes[0];
 
+    // Apply a buffer multiplier (e.g., 1.6x) for city traffic, stops, and realistic riding speeds
+    const bufferedDurationSeconds = route.duration * 1.6;
+
     return {
       distanceMeters: route.distance,
-      durationSeconds: route.duration,
+      durationSeconds: bufferedDurationSeconds,
     };
   } catch (error) {
     console.error("Road routing error:", error);
