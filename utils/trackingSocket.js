@@ -165,7 +165,13 @@ export const registerTrackingSocketHandlers = (io, socket) => {
         distanceRemainingKm: distanceToTargetMeters
           ? Number((distanceToTargetMeters / 1000).toFixed(2))
           : null,
+        distanceRemaining: distanceToTargetMeters
+          ? `${(distanceToTargetMeters / 1000).toFixed(1)} km`
+          : "Calculating...",
         etaMinutes: activeDelivery.etaMinutes,
+        estimatedArrival: activeDelivery.etaMinutes
+          ? `${activeDelivery.etaMinutes} mins`
+          : "Calculating...",
         updatedAt: new Date(),
       });
     } catch (error) {
