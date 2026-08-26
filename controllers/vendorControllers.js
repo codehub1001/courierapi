@@ -1,6 +1,9 @@
 import prisma from "../prismaClient.js";
 import { geocodeAddress } from "../utils/geocodeAddress.js";
 import { sendNotification } from "../utils/sendNotification.js";
+import { getRoadRoute } from "../utils/routing.js";
+import { calculateDeliveryFee } from "../utils/pricing.js";
+
 /*
 |--------------------------------------------------------------------------
 | GET VENDOR PROFILE
@@ -206,6 +209,7 @@ export const createDelivery = async (req, res) => {
       packageType,
       packageWeight,
       deliveryInstructions,
+      isPeakHour = false,
 
       // PRICE CONFIRMATION
       confirmed = false,
@@ -318,49 +322,39 @@ export const createDelivery = async (req, res) => {
     }
 
     // =====================================================
-    // 6. CALCULATE DISTANCE (HAVERSINE)
+    // 6. CALCULATE ACTUAL ROAD DISTANCE (OSRM)
     // =====================================================
-    const calculateDistance = (lat1, lon1, lat2, lon2) => {
-      const earthRadius = 6371;
-      const dLat = ((lat2 - lat1) * Math.PI) / 180;
-      const dLon = ((lon2 - lon1) * Math.PI) / 180;
-
-      const a =
-        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-        Math.cos((lat1 * Math.PI) / 180) *
-          Math.cos((lat2 * Math.PI) / 180) *
-          Math.sin(dLon / 2) *
-          Math.sin(dLon / 2);
-
-      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-      return earthRadius * c;
-    };
-
-    const distanceKm = calculateDistance(
+    const route = await getRoadRoute(
       pickupLocation.latitude,
       pickupLocation.longitude,
       deliveryLocation.latitude,
       deliveryLocation.longitude
     );
 
-    // =====================================================
-    // 7. CALCULATE PRICING
-    // =====================================================
-    const BASE_FARE = 1500;
-    const SYSTEM_FEE = 600;
-    const RATE_PER_KM = 200;
+    if (!route) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Unable to calculate a road route between pickup and destination.",
+      });
+    }
 
-    const distanceCost = distanceKm * RATE_PER_KM;
-    const riderFeeRaw = BASE_FARE + distanceCost;
-    const riderFee = Math.ceil(riderFeeRaw / 100) * 100;
+    const distanceInKm = route.distanceMeters / 1000;
 
-    const totalFareRaw = riderFee + SYSTEM_FEE;
-    const totalFare = Math.ceil(totalFareRaw / 100) * 100;
+    // =====================================================
+    // 7. CALCULATE PRICING VIA PRICING UTILITY
+    // =====================================================
+    const pricingBreakdown = calculateDeliveryFee({
+      distanceInKm,
+      isPeakHour: Boolean(isPeakHour),
+    });
+
+    const { riderFee, totalFare, systemFee } = pricingBreakdown;
 
     const pricing = {
-      distanceKm: Number(distanceKm.toFixed(2)),
+      distanceKm: Number(distanceInKm.toFixed(2)),
       riderFee,
-      systemFee: SYSTEM_FEE,
+      systemFee,
       totalFare,
     };
 
@@ -381,6 +375,7 @@ export const createDelivery = async (req, res) => {
         pricing: {
           totalFare,
           riderFee,
+          systemFee: pricing.systemFee,
           distanceKm: pricing.distanceKm,
         },
       });
@@ -457,6 +452,23 @@ export const createDelivery = async (req, res) => {
       },
     });
 
+    // Helper: Haversine distance strictly for finding rider proximity
+    const calculateHaversine = (lat1, lon1, lat2, lon2) => {
+      const earthRadius = 6371;
+      const dLat = ((lat2 - lat1) * Math.PI) / 180;
+      const dLon = ((lon2 - lon1) * Math.PI) / 180;
+
+      const a =
+        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos((lat1 * Math.PI) / 180) *
+          Math.cos((lat2 * Math.PI) / 180) *
+          Math.sin(dLon / 2) *
+          Math.sin(dLon / 2);
+
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      return earthRadius * c;
+    };
+
     // Handle no available riders
     if (riders.length === 0) {
       return res.status(201).json({
@@ -464,7 +476,7 @@ export const createDelivery = async (req, res) => {
         message:
           "Delivery created successfully, but no available riders were found.",
         delivery,
-        pricing: { totalFare, riderFee },
+        pricing: { totalFare, riderFee, systemFee },
         closestRiders: [],
       });
     }
@@ -474,7 +486,7 @@ export const createDelivery = async (req, res) => {
     // =====================================================
     const ridersWithDistance = riders
       .map((rider) => {
-        const distance = calculateDistance(
+        const distance = calculateHaversine(
           pickupLocation.latitude,
           pickupLocation.longitude,
           rider.currentLatitude,
@@ -534,6 +546,8 @@ export const createDelivery = async (req, res) => {
       pricing: {
         totalFare,
         riderFee,
+        systemFee,
+        distanceKm: pricing.distanceKm,
       },
       pickupLocation,
       deliveryLocation,
