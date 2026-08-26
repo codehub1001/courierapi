@@ -5,9 +5,10 @@ dotenv.config();
 import cookieParser from "cookie-parser";
 import path from "path";
 import { fileURLToPath } from "url";
-import http from "http"; // 👈 Import HTTP module
-import { Server } from "socket.io"; // 👈 Import Socket.io
-import { registerTrackingSocketHandlers } from "./utils/trackingSocket.js"; // 👈 Import tracking socket handler
+import http from "http";
+import { Server } from "socket.io";
+import { registerTrackingSocketHandlers } from "./utils/trackingSocket.js";
+import { pollUnassignedDeliveries } from "./service/deliveryPoller.js"; // 👉 Import the poller
 
 import walletRoutes from "./routes/walletRoutes.js";
 import userRoutes from "./routes/userRoutes.js";
@@ -99,10 +100,13 @@ app.get("/", (req, res) => {
 });
 
 // =====================================================
-// 5. SERVER START
+// 5. SERVER START & BACKGROUND JOBS
 // =====================================================
 const PORT = process.env.PORT || 5000;
 
 server.listen(PORT, () => {
   console.log(`🚀 CourierX server running on port ${PORT}`);
+
+  // 👉 Run background poller every 5 minutes for unassigned PENDING deliveries
+  setInterval(pollUnassignedDeliveries, 5 * 60 * 1000);
 });
