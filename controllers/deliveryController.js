@@ -1,7 +1,7 @@
 import prisma from "../prismaClient.js";
+// Import your OSRM road route utility (adjust path if needed)
+import { getRoadRoute } from "../utils/roadRoute.js"; 
 
-
-// GET /api/deliveries/track/:trackingId
 export const trackPackage = async (req, res) => {
   try {
     const { trackingId } = req.params;
@@ -68,33 +68,15 @@ export const trackPackage = async (req, res) => {
     }
 
     // =====================================================
-    // 3. HAVERSINE DISTANCE MATH HELPER
-    // =====================================================
-    const calculateDistanceKm = (lat1, lon1, lat2, lon2) => {
-      if (lat1 == null || lon1 == null || lat2 == null || lon2 == null) return null;
-      const R = 6371;
-      const dLat = ((lat2 - lat1) * Math.PI) / 180;
-      const dLon = ((lon2 - lon1) * Math.PI) / 180;
-
-      const a =
-        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-        Math.cos((lat1 * Math.PI) / 180) *
-          Math.cos((lat2 * Math.PI) / 180) *
-          Math.sin(dLon / 2) *
-          Math.sin(dLon / 2);
-
-      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-      return Number((R * c).toFixed(2));
-    };
-
-    // =====================================================
-    // 4. CALCULATE DYNAMIC DISTANCE REMAINING & ETA
+    // 3. CALCULATE REAL ROAD DISTANCE & ETA VIA OSRM
     // =====================================================
     let distanceRemainingKm = null;
+    let computedEtaMinutes = null;
     let targetCoords = null;
 
     if (delivery.status === "DELIVERED") {
       distanceRemainingKm = 0;
+      computedEtaMinutes = 0;
     } else if (delivery.rider && delivery.rider.currentLatitude && delivery.rider.currentLongitude) {
       if (delivery.status === "ASSIGNED") {
         targetCoords = {
@@ -109,23 +91,28 @@ export const trackPackage = async (req, res) => {
       }
 
       if (targetCoords) {
-        distanceRemainingKm = calculateDistanceKm(
+        const roadRoute = await getRoadRoute(
           delivery.rider.currentLatitude,
           delivery.rider.currentLongitude,
           targetCoords.latitude,
           targetCoords.longitude
         );
+
+        if (roadRoute) {
+          // OSRM returns distance in meters and duration in seconds
+          distanceRemainingKm = Number((roadRoute.distanceMeters / 1000).toFixed(2));
+          computedEtaMinutes = Math.max(1, Math.ceil(roadRoute.durationSeconds / 60));
+        }
       }
     }
 
-    // Ensure fallback live calculation if etaMinutes is missing in DB but distance is available
-    let computedEtaMinutes = delivery.etaMinutes;
-    if (!computedEtaMinutes && distanceRemainingKm !== null) {
-      computedEtaMinutes = Math.max(1, Math.ceil((distanceRemainingKm * 1000) / 416));
+    // Fallback to DB etaMinutes if road routing fails or isn't triggered
+    if (computedEtaMinutes === null) {
+      computedEtaMinutes = delivery.etaMinutes;
     }
 
     // =====================================================
-    // 5. DETERMINE CURRENT PROGRESS STEP
+    // 4. DETERMINE CURRENT PROGRESS STEP
     // =====================================================
     const statusStepMap = {
       PENDING: 1,
@@ -139,7 +126,7 @@ export const trackPackage = async (req, res) => {
     const currentStep = statusStepMap[delivery.status] || 1;
 
     // =====================================================
-    // 6. FORMAT DATA PAYLOADS
+    // 5. FORMAT DATA PAYLOADS
     // =====================================================
     const rider = delivery.rider
       ? {
@@ -183,7 +170,7 @@ export const trackPackage = async (req, res) => {
     };
 
     // =====================================================
-    // 7. DELIVERY STEPS & ACTIVITY LOGS
+    // 6. DELIVERY STEPS & ACTIVITY LOGS
     // =====================================================
     const steps = [
       {
@@ -280,7 +267,7 @@ export const trackPackage = async (req, res) => {
     }
 
     // =====================================================
-    // 8. RESPONSE PAYLOAD
+    // 7. RESPONSE PAYLOAD
     // =====================================================
     return res.status(200).json({
       success: true,
@@ -312,7 +299,7 @@ export const trackPackage = async (req, res) => {
         createdAt: delivery.createdAt,
         updatedAt: delivery.updatedAt,
 
-        // 📍 LIVE ESTIMATES & DISTANCE METRICS
+        // 📍 LIVE ESTIMATES & DISTANCE METRICS VIA OSRM
         etaMinutes: computedEtaMinutes || null,
         estimatedArrival:
           delivery.status === "DELIVERED"
