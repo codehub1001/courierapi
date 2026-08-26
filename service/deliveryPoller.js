@@ -16,7 +16,7 @@ const calculateHaversine = (lat1, lon1, lat2, lon2) => {
 
 export const pollUnassignedDeliveries = async () => {
   try {
-    console.log("🔄 Running background poll for unassigned PENDING deliveries...");
+    console.log("🔄 Running repoll background job for unassigned PENDING deliveries...");
 
     const pendingDeliveries = await prisma.delivery.findMany({
       where: {
@@ -25,116 +25,68 @@ export const pollUnassignedDeliveries = async () => {
       },
     });
 
-    console.log(`📦 Found ${pendingDeliveries.length} total unassigned pending deliveries in DB.`);
-
-    const now = Date.now();
-    const fiveMinutesAgo = new Date(now - 5 * 60 * 1000);
-    const maxExpirationAge = new Date(now - 45 * 60 * 1000); // Stop broadcasting after 45 mins
+    console.log(`📦 Found ${pendingDeliveries.length} unassigned pending deliveries to process.`);
 
     for (const delivery of pendingDeliveries) {
-      const createdAt = new Date(delivery.createdAt);
+      // Relaxed query for debugging: finds ANY rider in the system
+      const availableRiders = await prisma.riderProfile.findMany({
+        include: {
+          user: { select: { id: true, fullName: true, phone: true } },
+        },
+      });
 
-      // Stop polling completely if the delivery is older than 45 minutes to prevent infinite loops
-      if (createdAt <= maxExpirationAge) {
-        console.log(`⌛ Delivery ${delivery.trackingId} exceeded max broadcast window. Marking as EXPIRED.`);
-        await prisma.delivery.update({
-          where: { id: delivery.id },
-          data: { status: "EXPIRED" },
-        });
+      console.log(`👥 Total riders found in DB: ${availableRiders.length}`);
+
+      if (availableRiders.length === 0) {
+        console.log(`⚠️ No riders exist in the RiderProfile table at all!`);
         continue;
       }
 
-      if (createdAt <= fiveMinutesAgo) {
-        console.log(`⏱️ Delivery ${delivery.trackingId} passed the 5-minute age check.`);
-
-        // Expire old pending requests
-        await prisma.deliveryRequest.updateMany({
-          where: {
-            deliveryId: delivery.id,
-            status: "PENDING",
-          },
-          data: {
-            status: "EXPIRED",
-          },
-        });
-
-        // Find available verified riders
-        const availableRiders = await prisma.riderProfile.findMany({
-          where: {
-            isVerified: true,
-            isAvailable: true,
-            currentLatitude: { not: null },
-            currentLongitude: { not: null },
-            deliveries: {
-              none: {
-                status: {
-                  in: ["ASSIGNED", "PICKED_UP", "IN_TRANSIT"],
-                },
-              },
-            },
-            deliveryRequests: {
-              none: {
-                deliveryId: delivery.id,
-                status: "PENDING",
-              },
-            },
-          },
-          include: {
-            user: { select: { id: true, fullName: true, phone: true } },
-          },
-        });
-
-        if (availableRiders.length === 0) {
-          console.log(`⚠️ No new available riders found for delivery ${delivery.trackingId}`);
-          continue;
-        }
-
-        // Sort and slice next batch
-        const nextBatchRiders = availableRiders
-          .map((rider) => ({
+      // Map riders and handle potential null coordinates safely
+      const nextBatchRiders = availableRiders
+        .map((rider) => {
+          const lat = rider.currentLatitude ?? delivery.pickupLatitude;
+          const lon = rider.currentLongitude ?? delivery.pickupLongitude;
+          return {
             ...rider,
             distanceFromPickup: calculateHaversine(
               delivery.pickupLatitude,
               delivery.pickupLongitude,
-              rider.currentLatitude,
-              rider.currentLongitude
+              lat,
+              lon
             ),
-          }))
-          .sort((a, b) => a.distanceFromPickup - b.distanceFromPickup)
-          .slice(0, 5);
+          };
+        })
+        .sort((a, b) => a.distanceFromPickup - b.distanceFromPickup)
+        .slice(0, 5);
 
-        if (nextBatchRiders.length === 0) continue;
+      // Create delivery requests
+      await prisma.deliveryRequest.createMany({
+        data: nextBatchRiders.map((rider) => ({
+          deliveryId: delivery.id,
+          riderId: rider.id,
+          status: "PENDING",
+          distanceFromPickup: rider.distanceFromPickup,
+          expiresAt: new Date(Date.now() + 5 * 60 * 1000),
+        })),
+        skipDuplicates: true,
+      });
 
-        // Create fresh delivery requests
-        await prisma.deliveryRequest.createMany({
-          data: nextBatchRiders.map((rider) => ({
-            deliveryId: delivery.id,
-            riderId: rider.id,
-            status: "PENDING",
-            distanceFromPickup: rider.distanceFromPickup,
-            expiresAt: new Date(Date.now() + 5 * 60 * 1000),
-          })),
-          skipDuplicates: true,
-        });
+      // Send notifications
+      await Promise.all(
+        nextBatchRiders.map((rider) =>
+          sendNotification({
+            userId: rider.userId,
+            title: "New Delivery Available 📦",
+            message: `Package (${delivery.trackingId}) is available near you.`,
+            type: "DELIVERY",
+          })
+        )
+      );
 
-        // Notify riders
-        await Promise.all(
-          nextBatchRiders.map((rider) =>
-            sendNotification({
-              userId: rider.userId,
-              title: "New Delivery Available 📦",
-              message: `Package (${delivery.trackingId}) is still waiting near you (${rider.distanceFromPickup.toFixed(1)} km away).`,
-              type: "DELIVERY",
-            })
-          )
-        );
-
-        console.log(`✅ Re-broadcasted delivery ${delivery.trackingId} to ${nextBatchRiders.length} new riders.`);
-      } else {
-        console.log(`⏳ Delivery ${delivery.trackingId} is too fresh. Skipping.`);
-      }
+      console.log(`✅ Successfully broadcasted delivery ${delivery.trackingId} to ${nextBatchRiders.length} riders.`);
     }
   } catch (error) {
-    console.error("❌ Error in pollUnassignedDeliveries background job:", error);
+    console.error("❌ Error in pollUnassignedDeliveries repoll job:", error);
   }
 };
