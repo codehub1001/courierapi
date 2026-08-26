@@ -3,6 +3,7 @@ import { geocodeAddress } from "../utils/geocodeAddress.js";
 import { sendNotification } from "../utils/sendNotification.js";
 import { getRoadRoute } from "../utils/routing.js";
 import { calculateDeliveryFee } from "../utils/pricing.js";
+import { dispatchDeliveryToNearbyRiders } from "../utils/dispatchHelper.js";
 
 /*
 |--------------------------------------------------------------------------
@@ -423,125 +424,19 @@ export const createDelivery = async (req, res) => {
     });
 
     // =====================================================
-    // 11. FIND AVAILABLE RIDERS
+    // 11. DISPATCH TO NEARBY RIDERS (REUSABLE HELPER)
     // =====================================================
-    const riders = await prisma.riderProfile.findMany({
-      where: {
-        isVerified: true,
-        isAvailable: true,
-        currentLatitude: { not: null },
-        currentLongitude: { not: null },
-        deliveries: {
-          none: {
-            status: {
-              in: ["ASSIGNED", "PICKED_UP", "IN_TRANSIT"],
-            },
-          },
-        },
-      },
-      include: {
-        user: {
-          select: {
-            id: true,
-            fullName: true,
-            username: true,
-            phone: true,
-            email: true,
-          },
-        },
-      },
-    });
-
-    // Helper: Haversine distance strictly for finding rider proximity
-    const calculateHaversine = (lat1, lon1, lat2, lon2) => {
-      const earthRadius = 6371;
-      const dLat = ((lat2 - lat1) * Math.PI) / 180;
-      const dLon = ((lon2 - lon1) * Math.PI) / 180;
-
-      const a =
-        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-        Math.cos((lat1 * Math.PI) / 180) *
-          Math.cos((lat2 * Math.PI) / 180) *
-          Math.sin(dLon / 2) *
-          Math.sin(dLon / 2);
-
-      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-      return earthRadius * c;
-    };
-
-    // Handle no available riders
-    if (riders.length === 0) {
-      return res.status(201).json({
-        success: true,
-        message:
-          "Delivery created successfully, but no available riders were found.",
-        delivery,
-        pricing: { totalFare, riderFee, systemFee },
-        closestRiders: [],
-      });
-    }
+    const closestRiders = await dispatchDeliveryToNearbyRiders(delivery);
 
     // =====================================================
-    // 12. SORT RIDERS BY DISTANCE TO PICKUP
-    // =====================================================
-    const ridersWithDistance = riders
-      .map((rider) => {
-        const distance = calculateHaversine(
-          pickupLocation.latitude,
-          pickupLocation.longitude,
-          rider.currentLatitude,
-          rider.currentLongitude
-        );
-
-        return {
-          ...rider,
-          distanceFromPickup: distance,
-        };
-      })
-      .sort((a, b) => a.distanceFromPickup - b.distanceFromPickup);
-
-    const closestRiders = ridersWithDistance.slice(0, 5);
-
-    // =====================================================
-    // 13. CREATE DELIVERY REQUESTS
-    // =====================================================
-    await prisma.deliveryRequest.createMany({
-      data: closestRiders.map((rider) => ({
-        deliveryId: delivery.id,
-        riderId: rider.id,
-        status: "PENDING",
-        distanceFromPickup: rider.distanceFromPickup,
-        expiresAt: new Date(Date.now() + 5 * 60 * 1000),
-      })),
-    });
-
-    // =====================================================
-    // 14. NOTIFY CLOSEST RIDERS
-    // =====================================================
-    try {
-      await Promise.all(
-        closestRiders.map((rider) =>
-          sendNotification({
-            userId: rider.userId,
-            title: "New Delivery Available 📦",
-            message: `A new package (${trackingId}) is available near you (${rider.distanceFromPickup.toFixed(
-              1
-            )} km away).`,
-            type: "DELIVERY",
-          })
-        )
-      );
-    } catch (notifErr) {
-      console.error("Failed to send notifications to nearby riders:", notifErr);
-    }
-
-    // =====================================================
-    // 15. RETURN RESPONSE
+    // 12. RETURN RESPONSE
     // =====================================================
     return res.status(201).json({
       success: true,
       message:
-        "Delivery created successfully. Nearby riders have been notified.",
+        closestRiders.length > 0
+          ? "Delivery created successfully. Nearby riders have been notified."
+          : "Delivery created successfully, but no available riders were found.",
       delivery,
       pricing: {
         totalFare,
@@ -558,9 +453,7 @@ export const createDelivery = async (req, res) => {
         user: {
           id: rider.user.id,
           fullName: rider.user.fullName,
-          username: rider.user.username,
           phone: rider.user.phone,
-          email: rider.user.email,
         },
         vehicleNumber: rider.vehicleNumber,
         deliveryArea: rider.deliveryArea,
