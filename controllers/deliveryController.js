@@ -88,7 +88,7 @@ export const trackPackage = async (req, res) => {
     };
 
     // =====================================================
-    // 4. CALCULATE DYNAMIC DISTANCE REMAINING
+    // 4. CALCULATE DYNAMIC DISTANCE REMAINING & ETA
     // =====================================================
     let distanceRemainingKm = null;
     let targetCoords = null;
@@ -96,15 +96,12 @@ export const trackPackage = async (req, res) => {
     if (delivery.status === "DELIVERED") {
       distanceRemainingKm = 0;
     } else if (delivery.rider && delivery.rider.currentLatitude && delivery.rider.currentLongitude) {
-      // If ASSIGNED -> Rider is heading to pickup location
       if (delivery.status === "ASSIGNED") {
         targetCoords = {
           latitude: delivery.pickupLatitude,
           longitude: delivery.pickupLongitude,
         };
-      } 
-      // If PICKED_UP or IN_TRANSIT -> Rider is heading to recipient location
-      else if (delivery.status === "PICKED_UP" || delivery.status === "IN_TRANSIT") {
+      } else if (delivery.status === "PICKED_UP" || delivery.status === "IN_TRANSIT") {
         targetCoords = {
           latitude: delivery.recipientLatitude,
           longitude: delivery.recipientLongitude,
@@ -119,6 +116,12 @@ export const trackPackage = async (req, res) => {
           targetCoords.longitude
         );
       }
+    }
+
+    // Ensure fallback live calculation if etaMinutes is missing in DB but distance is available
+    let computedEtaMinutes = delivery.etaMinutes;
+    if (!computedEtaMinutes && distanceRemainingKm !== null) {
+      computedEtaMinutes = Math.max(1, Math.ceil((distanceRemainingKm * 1000) / 416));
     }
 
     // =====================================================
@@ -310,18 +313,18 @@ export const trackPackage = async (req, res) => {
         updatedAt: delivery.updatedAt,
 
         // 📍 LIVE ESTIMATES & DISTANCE METRICS
-        etaMinutes: delivery.etaMinutes || null,
+        etaMinutes: computedEtaMinutes || null,
         estimatedArrival:
           delivery.status === "DELIVERED"
             ? "Delivered"
-            : delivery.etaMinutes
-            ? `${delivery.etaMinutes} mins`
+            : computedEtaMinutes
+            ? `${computedEtaMinutes} mins`
             : delivery.status === "IN_TRANSIT" || delivery.status === "ASSIGNED"
             ? "Calculating..."
             : "Pending",
 
         distanceRemaining:
-          distanceRemainingKm !== null ? `${distanceRemainingKm} km` : "N/A",
+          distanceRemainingKm !== null ? `${distanceRemainingKm} km` : "Calculating...",
         distanceRemainingKm,
       },
     });
