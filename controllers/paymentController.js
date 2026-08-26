@@ -357,17 +357,21 @@ export const verifyDeliveryPayment = async (req, res) => {
     const trackingLink = `${siteUrl}/track/${delivery.trackingId}`;
 
     if (typeof sendWhatsAppMessage === "function") {
-      // ✅ CORRECT: Pass the templateParams object matching your service
-      sendWhatsAppMessage(delivery.recipientPhone, {
-        recipientName: delivery.recipientName || "Customer",
-        trackingId: delivery.trackingId,
-        trackingLink: trackingLink,
-      }).catch((err) => {
-        console.error("Failed to send recipient WhatsApp notification:", err);
+      // ✅ Check your service wrapper signature: 
+      // If sendWhatsAppMessage expects (phone, templateName, components/parameters array):
+      sendWhatsAppMessage(
+        delivery.recipientPhone,
+        "courierx_delivery_update", // Replace with your approved Meta template name if needed
+        [
+          delivery.recipientName || "Customer",
+          delivery.trackingId,
+          trackingLink,
+        ]
+      ).catch((err) => {
+        console.error(`Failed to send recipient WhatsApp notification for tracking ID ${delivery.trackingId}:`, err);
       });
     }
   }
-
     return res.status(200).json({
       success: true,
       message: "Payment verified successfully",
