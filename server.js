@@ -107,6 +107,9 @@ const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`🚀 CourierX server running on port ${PORT}`);
 
+  // 👉 Optional: Run once immediately on startup so you don't wait 5 mins for the first check
+  pollUnassignedDeliveries();
+
   // 👉 Run background poller every 5 minutes for unassigned PENDING deliveries
   setInterval(pollUnassignedDeliveries, 5 * 60 * 1000);
 });

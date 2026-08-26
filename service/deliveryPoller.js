@@ -45,7 +45,7 @@ export const pollUnassignedDeliveries = async () => {
           },
         });
 
-        // 3. Find available verified riders who have NEVER received a request for this delivery
+        // 3. Find available verified riders who DO NOT currently have an active PENDING request for this delivery
         const availableRiders = await prisma.riderProfile.findMany({
           where: {
             isVerified: true,
@@ -61,7 +61,8 @@ export const pollUnassignedDeliveries = async () => {
             },
             deliveryRequests: {
               none: {
-                deliveryId: delivery.id, // Exclude riders who already have ANY request record for this delivery
+                deliveryId: delivery.id,
+                status: "PENDING", // Only ignore if they have an active PENDING request right now
               },
             },
           },
@@ -92,7 +93,7 @@ export const pollUnassignedDeliveries = async () => {
 
         if (nextBatchRiders.length === 0) continue;
 
-        // 5. Create fresh delivery requests with skipDuplicates safety net
+        // 5. Create fresh delivery requests for the next batch with skipDuplicates safety net
         await prisma.deliveryRequest.createMany({
           data: nextBatchRiders.map((rider) => ({
             deliveryId: delivery.id,
@@ -101,7 +102,7 @@ export const pollUnassignedDeliveries = async () => {
             distanceFromPickup: rider.distanceFromPickup,
             expiresAt: new Date(Date.now() + 5 * 60 * 1000),
           })),
-          skipDuplicates: true, // Prevents crashing if a duplicate key somehow slips through
+          skipDuplicates: true, // Prevents crashing if a duplicate key constraint hits from previous historical rows
         });
 
         // 6. Notify the new batch of riders
