@@ -28,7 +28,6 @@ export const pollUnassignedDeliveries = async () => {
     console.log(`📦 Found ${pendingDeliveries.length} unassigned pending deliveries to process.`);
 
     for (const delivery of pendingDeliveries) {
-      // Relaxed query for debugging: finds ANY rider in the system
       const availableRiders = await prisma.riderProfile.findMany({
         include: {
           user: { select: { id: true, fullName: true, phone: true } },
@@ -42,7 +41,6 @@ export const pollUnassignedDeliveries = async () => {
         continue;
       }
 
-      // Map riders and handle potential null coordinates safely
       const nextBatchRiders = availableRiders
         .map((rider) => {
           const lat = rider.currentLatitude ?? delivery.pickupLatitude;
@@ -60,31 +58,45 @@ export const pollUnassignedDeliveries = async () => {
         .sort((a, b) => a.distanceFromPickup - b.distanceFromPickup)
         .slice(0, 5);
 
-      // Create delivery requests
-      await prisma.deliveryRequest.createMany({
-        data: nextBatchRiders.map((rider) => ({
-          deliveryId: delivery.id,
-          riderId: rider.id,
-          status: "PENDING",
-          distanceFromPickup: rider.distanceFromPickup,
-          expiresAt: new Date(Date.now() + 5 * 60 * 1000),
-        })),
-        skipDuplicates: true,
-      });
+      for (const rider of nextBatchRiders) {
+        try {
+          // Use upsert so it updates or creates the request cleanly without constraint crashes
+          await prisma.deliveryRequest.upsert({
+            where: {
+              deliveryId_riderId: {
+                deliveryId: delivery.id,
+                riderId: rider.id,
+              },
+            },
+            update: {
+              status: "PENDING",
+              distanceFromPickup: rider.distanceFromPickup,
+              expiresAt: new Date(Date.now() + 5 * 60 * 1000),
+            },
+            create: {
+              deliveryId: delivery.id,
+              riderId: rider.id,
+              status: "PENDING",
+              distanceFromPickup: rider.distanceFromPickup,
+              expiresAt: new Date(Date.now() + 5 * 60 * 1000),
+            },
+          });
 
-      // Send notifications
-      await Promise.all(
-        nextBatchRiders.map((rider) =>
-          sendNotification({
-            userId: rider.userId,
-            title: "New Delivery Available 📦",
-            message: `Package (${delivery.trackingId}) is available near you.`,
-            type: "DELIVERY",
-          })
-        )
-      );
+          // Send notification for each successfully processed rider
+          if (rider.userId) {
+            await sendNotification({
+              userId: rider.userId,
+              title: "New Delivery Available 📦",
+              message: `Package (${delivery.trackingId}) is available near you.`,
+              type: "DELIVERY",
+            });
+          }
+        } catch (riderErr) {
+          console.error(`❌ Failed to create delivery request for rider ${rider.id}:`, riderErr.message);
+        }
+      }
 
-      console.log(`✅ Successfully broadcasted delivery ${delivery.trackingId} to ${nextBatchRiders.length} riders.`);
+      console.log(`✅ Successfully processed delivery ${delivery.trackingId} for ${nextBatchRiders.length} riders.`);
     }
   } catch (error) {
     console.error("❌ Error in pollUnassignedDeliveries repoll job:", error);
