@@ -254,6 +254,7 @@ model Delivery {
   pickupLongitude    Float?
   recipientLatitude  Float?
   recipientLongitude Float?
+  assignedAt DateTime?
 
   packageType          String
   packageWeight        String?

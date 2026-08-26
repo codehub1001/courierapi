@@ -940,7 +940,7 @@ export const updateDeliveryStatus = async (req, res) => {
       const completedDelivery =
         await prisma.$transaction(async (tx) => {
           // -------------------------------------------
-          // UPDATE DELIVERY
+          // UPDATE DELIVERY (Clear assignedAt since it's now completed)
           // -------------------------------------------
 
           const updatedDelivery =
@@ -950,6 +950,7 @@ export const updateDeliveryStatus = async (req, res) => {
               },
               data: {
                 status: "DELIVERED",
+                assignedAt: null, 
               },
             });
 
@@ -1084,6 +1085,8 @@ export const updateDeliveryStatus = async (req, res) => {
         },
         data: {
           status,
+          // Clear assignedAt once the package is picked up so it leaves the stale queue
+          ...(status === "PICKED_UP" ? { assignedAt: null } : {}),
         },
       });
 

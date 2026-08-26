@@ -410,9 +410,10 @@ export const getUnpaidAssignedDeliveries = async (req, res) => {
       where: {
         status: "ASSIGNED",
         
-        // Ensure it has been in this state for longer than 15 minutes
-        updatedAt: {
+        // Ensure it has been in the assigned state for longer than 15 minutes
+        assignedAt: {
           lte: fifteenMinutesAgo,
+          not: null,
         },
 
         // Ensure there is no successful payment attached to this delivery
@@ -449,7 +450,7 @@ export const getUnpaidAssignedDeliveries = async (req, res) => {
         },
         payments: true, // Includes payment attempt info for review
       },
-      orderBy: { updatedAt: "asc" }, // Shows the oldest stale orders first
+      orderBy: { assignedAt: "asc" }, // Shows the oldest stale orders first
     });
 
     return res.status(200).json({
