@@ -57,3 +57,33 @@ export const sendWhatsAppMessage = async (recipientPhone, templateName, paramsAr
     );
   }
 };
+export const registerWhatsAppNumber = async () => {
+  try {
+    const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+    const accessToken = process.env.WHATSAPP_TOKEN;
+
+    if (!phoneNumberId || !accessToken) {
+      console.log("⚠️ Credentials missing");
+      return;
+    }
+
+    const response = await axios.post(
+      `https://graph.facebook.com/v21.0/${phoneNumberId}/register`,
+      {
+        messaging_product: "whatsapp",
+        pin: "123456" // Your 6-digit PIN for two-step verification
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    console.log("✅ Registration successful:", response.data);
+  } catch (error) {
+    console.error("❌ Registration failed:", error.response?.data || error.message);
+  }
+};
+registerWhatsAppNumber();
