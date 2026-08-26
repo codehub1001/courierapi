@@ -1,5 +1,5 @@
-import prisma from "../prismaClient.js";; // adjust your prisma import path
-import { sendNotification } from "../utils/sendNotification.js"; // adjust your notification service path
+import prisma from "../prismaClient.js";
+import { sendNotification } from "../utils/sendNotification.js";
 
 // Haversine distance formula for rider proximity
 const calculateHaversine = (lat1, lon1, lat2, lon2) => {
@@ -45,7 +45,7 @@ export const pollUnassignedDeliveries = async () => {
           },
         });
 
-        // 3. Find available verified riders who DON'T already have an active request for this delivery
+        // 3. Find available verified riders who DON'T currently have a PENDING request for this delivery
         const availableRiders = await prisma.riderProfile.findMany({
           where: {
             isVerified: true,
@@ -62,6 +62,7 @@ export const pollUnassignedDeliveries = async () => {
             deliveryRequests: {
               none: {
                 deliveryId: delivery.id,
+                status: "PENDING", // Only ignore if they have an active PENDING request right now
               },
             },
           },
