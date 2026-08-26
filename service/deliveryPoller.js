@@ -41,7 +41,6 @@ export const pollUnassignedDeliveries = async () => {
             },
             select: { id: true, status: true },
           },
-          // Include existing delivery requests to check if we already notified them
           deliveryRequests: {
             where: { deliveryId: delivery.id },
           },
@@ -65,7 +64,6 @@ export const pollUnassignedDeliveries = async () => {
             ...rider,
             distanceFromPickup,
             hasActiveDelivery: rider.deliveries.length > 0,
-            // Check if a delivery request record already exists for this rider & delivery
             alreadyNotified: rider.deliveryRequests.length > 0,
           };
         })
@@ -79,9 +77,10 @@ export const pollUnassignedDeliveries = async () => {
         .sort((a, b) => a.distanceFromPickup - b.distanceFromPickup)
         .slice(0, 5);
 
+      let newlyNotifiedCount = 0;
+
       for (const rider of nextBatchRiders) {
         try {
-          // Upsert the delivery request record
           await prisma.deliveryRequest.upsert({
             where: {
               deliveryId_riderId: {
@@ -103,7 +102,6 @@ export const pollUnassignedDeliveries = async () => {
             },
           });
 
-          // 🛑 SMART CHECK: Only send a push/in-app notification if they HAVEN'T been notified for this delivery yet
           if (!rider.alreadyNotified && rider.userId) {
             const message = rider.hasActiveDelivery
               ? `A nearby delivery is on your current route (${rider.distanceFromPickup.toFixed(1)} km away).`
@@ -116,6 +114,7 @@ export const pollUnassignedDeliveries = async () => {
               type: "DELIVERY",
             });
             console.log(`📲 Notification sent to rider ${rider.id} for delivery ${delivery.trackingId}`);
+            newlyNotifiedCount++;
           } else {
             console.log(`🔕 Skipping duplicate notification for rider ${rider.id} (already notified).`);
           }
@@ -123,6 +122,8 @@ export const pollUnassignedDeliveries = async () => {
           console.error(`❌ Failed to process delivery request for rider ${rider.id}:`, riderErr.message);
         }
       }
+
+      console.log(`📊 Delivery ${delivery.trackingId} batch processed: ${nextBatchRiders.length} total riders in batch (${newlyNotifiedCount} newly notified).`);
     }
   } catch (error) {
     console.error("❌ Error in pollUnassignedDeliveries repoll job:", error);
