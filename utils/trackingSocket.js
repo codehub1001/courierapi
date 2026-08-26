@@ -1,6 +1,5 @@
 import prisma from "../prismaClient.js";
-
-
+import { sendWhatsAppMessage } from "./whatsappCloudService.js";
 
 // Haversine distance helper (returns distance in meters)
 const getDistanceInMeters = (lat1, lon1, lat2, lon2) => {
@@ -56,13 +55,17 @@ export const registerTrackingSocketHandlers = (io, socket) => {
         },
       });
 
-      // Fetch active delivery for rider using string literals
+      // Fetch active delivery including customer and vendor relations
       const activeDelivery = await prisma.delivery.findFirst({
         where: {
           riderId,
           status: {
             in: ["ASSIGNED", "PICKED_UP", "IN_TRANSIT"],
           },
+        },
+        include: {
+          customer: true, // Adjust relation name based on your schema
+          vendor: true,   // Adjust relation name based on your schema
         },
       });
 
@@ -111,24 +114,44 @@ export const registerTrackingSocketHandlers = (io, socket) => {
               data: { arrivedAtPickupAt: new Date() },
             });
 
+            // 1. Stream WebSocket Alert
             io.to(roomName).emit("GEOFENCE_TRIGGERED", {
               deliveryId: activeDelivery.id,
               event: "RIDER_ARRIVED_AT_PICKUP",
               message: "Your rider has arrived at the pickup location!",
               timestamp: new Date(),
             });
+
+            // 2. Send WhatsApp to Vendor (Fire-and-forget: Do NOT await)
+            if (activeDelivery.vendor?.phoneNumber) {
+              sendWhatsAppMessage(
+                activeDelivery.vendor.phoneNumber,
+                "rider_arrived_pickup", // Meta Approved Template Name
+                [activeDelivery.vendor.name || "Vendor", activeDelivery.id]
+              );
+            }
           } else if (!isEnRouteToPickup && !activeDelivery.arrivedAtDropoffAt) {
             await prisma.delivery.update({
               where: { id: activeDelivery.id },
               data: { arrivedAtDropoffAt: new Date() },
             });
 
+            // 1. Stream WebSocket Alert
             io.to(roomName).emit("GEOFENCE_TRIGGERED", {
               deliveryId: activeDelivery.id,
               event: "RIDER_ARRIVED_AT_DROPOFF",
               message: "Your rider is outside with your package!",
               timestamp: new Date(),
             });
+
+            // 2. Send WhatsApp to Customer (Fire-and-forget: Do NOT await)
+            if (activeDelivery.customer?.phoneNumber) {
+              sendWhatsAppMessage(
+                activeDelivery.customer.phoneNumber,
+                "rider_arrived_dropoff", // Meta Approved Template Name
+                [activeDelivery.customer.name || "Customer", activeDelivery.id]
+              );
+            }
           }
         }
       }

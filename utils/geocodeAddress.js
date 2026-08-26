@@ -14,27 +14,21 @@ export const geocodeAddress = async (address) => {
     const queryAddress = address.trim();
     if (!queryAddress) return null;
 
-    // Determine precision based on OpenStreetMap result type & address components
     const determinePrecision = (result) => {
       const details = result.address || {};
-      const type = result.type || "";
       const resultClass = result.class || "";
 
-      // Exact house/building match
       if (details.house_number || details.building || ["building", "amenity", "shop", "office"].includes(resultClass)) {
         return { precision: "EXACT", isApproximate: false };
       }
 
-      // Street level match
       if (details.road || details.pedestrian || details.footway || ["highway"].includes(resultClass)) {
         return { precision: "STREET", isApproximate: false };
       }
 
-      // Fallback area/neighborhood/city match
       return { precision: "AREA", isApproximate: true };
     };
 
-    // Helper function to query Nominatim API
     const fetchNominatim = async (queryString) => {
       let formattedQuery = queryString;
       if (!formattedQuery.toLowerCase().includes("nigeria")) {
@@ -88,15 +82,8 @@ export const geocodeAddress = async (address) => {
       };
     };
 
-    // ─────────────────────────────────────────────────────────────
-    // TIER 1: Exact Query
-    // ─────────────────────────────────────────────────────────────
     let geocodeResult = await fetchNominatim(queryAddress);
 
-    // ─────────────────────────────────────────────────────────────
-    // TIER 2: Cleaned Street Level (Strip unit/house/suite numbers)
-    // Examples: "No 14b Ixora St" -> "Ixora St", "Flat 3, 12 Bayo Ave" -> "12 Bayo Ave"
-    // ─────────────────────────────────────────────────────────────
     if (!geocodeResult) {
       console.log("⚠️ Exact match failed. Attempting cleanup for:", queryAddress);
 
@@ -111,14 +98,10 @@ export const geocodeAddress = async (address) => {
       }
     }
 
-    // ─────────────────────────────────────────────────────────────
-    // TIER 3: Local Area / LGA Fallback
-    // ─────────────────────────────────────────────────────────────
     if (!geocodeResult) {
       const lower = queryAddress.toLowerCase();
       let fallbackArea = null;
 
-      // Common Lagos Districts
       if (lower.includes("ikeja")) fallbackArea = "Ikeja, Lagos, Nigeria";
       else if (lower.includes("lekki")) fallbackArea = "Lekki, Lagos, Nigeria";
       else if (lower.includes("surulere")) fallbackArea = "Surulere, Lagos, Nigeria";
@@ -131,7 +114,6 @@ export const geocodeAddress = async (address) => {
       else if (lower.includes("festac")) fallbackArea = "Festac Town, Lagos, Nigeria";
       else if (lower.includes("ipaja")) fallbackArea = "Ipaja, Lagos, Nigeria";
       else if (lower.includes("ogba")) fallbackArea = "Ogba, Lagos, Nigeria";
-      // General State Fallbacks
       else if (lower.includes("lagos")) fallbackArea = "Lagos, Nigeria";
       else if (lower.includes("abuja")) fallbackArea = "Abuja, FCT, Nigeria";
       else if (lower.includes("ibadan")) fallbackArea = "Ibadan, Oyo, Nigeria";
@@ -151,14 +133,6 @@ export const geocodeAddress = async (address) => {
       console.log("⚠️ Nominatim found no coordinates for address:", queryAddress);
       return null;
     }
-
-    console.log("✅ Geocoding successful:", {
-      latitude: geocodeResult.latitude,
-      longitude: geocodeResult.longitude,
-      precision: geocodeResult.precision,
-      isApproximate: geocodeResult.isApproximate,
-      displayName: geocodeResult.displayName,
-    });
 
     return geocodeResult;
 

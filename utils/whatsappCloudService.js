@@ -1,6 +1,6 @@
 import axios from "axios";
 
-export const sendWhatsAppMessage = async (recipientPhone, templateParams) => {
+export const sendWhatsAppMessage = async (recipientPhone, templateName, paramsArray = []) => {
   try {
     let formattedPhone = recipientPhone.toString().trim();
     if (formattedPhone.startsWith("0")) {
@@ -13,29 +13,29 @@ export const sendWhatsAppMessage = async (recipientPhone, templateParams) => {
     const accessToken = process.env.WHATSAPP_TOKEN;
 
     if (!phoneNumberId || !accessToken) {
-      console.warn("WhatsApp credentials missing. Message skipped.");
+      console.warn("⚠️ WhatsApp credentials missing. Message skipped.");
       return;
     }
 
+    // Map parameters into Meta Cloud API expected format
+    const formattedParams = paramsArray.map((text) => ({
+      type: "text",
+      text: String(text),
+    }));
+
     const response = await axios.post(
-      `https://graph.facebook.com/v19.0/${phoneNumberId}/messages`, // Updated to a stable version
+      `https://graph.facebook.com/v19.0/${phoneNumberId}/messages`,
       {
         messaging_product: "whatsapp",
         to: formattedPhone,
         type: "template",
         template: {
-          name: "payment_success", // Must match your approved template name in Meta
-          language: {
-            code: "en", // Or your target language code
-          },
+          name: templateName,
+          language: { code: "en" },
           components: [
             {
               type: "body",
-              parameters: [
-                { type: "text", text: templateParams.recipientName },
-                { type: "text", text: templateParams.trackingId },
-                { type: "text", text: templateParams.trackingLink },
-              ],
+              parameters: formattedParams,
             },
           ],
         },
@@ -48,11 +48,11 @@ export const sendWhatsAppMessage = async (recipientPhone, templateParams) => {
       }
     );
 
-    console.log("WhatsApp template message sent successfully:", response.data);
+    console.log(`✅ WhatsApp [${templateName}] sent successfully to ${formattedPhone}`);
     return response.data;
   } catch (error) {
     console.error(
-      "Failed to send WhatsApp message:",
+      "❌ Failed to send WhatsApp message:",
       error.response?.data || error.message
     );
   }
