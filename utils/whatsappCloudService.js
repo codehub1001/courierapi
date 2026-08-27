@@ -86,4 +86,3 @@ export const registerWhatsAppNumber = async () => {
     console.error("❌ Registration failed:", error.response?.data || error.message);
   }
 };
-registerWhatsAppNumber();
