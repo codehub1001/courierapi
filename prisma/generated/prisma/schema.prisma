@@ -1,0 +1,591 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "./generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────────
+
+enum UserRole {
+  ADMIN
+  VENDOR
+  RIDER
+}
+
+enum VerificationStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum AccountStatus {
+  ACTIVE
+  SUSPENDED
+  PENDING
+}
+
+enum DeliveryStatus {
+  PENDING
+  ASSIGNED
+  PICKED_UP
+  IN_TRANSIT
+  DELIVERED
+  CANCELLED
+  EXPIRED
+}
+
+enum DeliveryRequestStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  EXPIRED
+}
+
+// ─────────────────────────────────────────────
+// PAYMENT ENUMS
+// ─────────────────────────────────────────────
+
+enum PaymentStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  ABANDONED
+  REFUNDED
+}
+
+enum PaymentMethod {
+  PAYSTACK
+  FLUTTERWAVE
+  CASH
+}
+
+// ─────────────────────────────────────────────
+// WALLET ENUMS
+// ─────────────────────────────────────────────
+
+enum TransactionType {
+  CREDIT
+  DEBIT
+}
+
+enum TransactionStatus {
+  PENDING
+  COMPLETED
+  FAILED
+}
+
+enum ReferralStatus {
+  PENDING
+  COMPLETED
+  REWARDED
+}
+
+enum VerificationDocumentType {
+  NIN
+  VOTERS_CARD
+  DRIVERS_LICENSE
+  INTERNATIONAL_PASSPORT
+}
+
+// ─────────────────────────────────────────────
+// WHATSAPP ENUMS
+// ─────────────────────────────────────────────
+
+enum WhatsAppMessageDirection {
+  INCOMING
+  OUTGOING
+}
+
+enum WhatsAppMessageStatus {
+  RECEIVED
+  SENT
+  DELIVERED
+  READ
+  FAILED
+}
+
+// ─────────────────────────────────────────────
+// USER
+// ─────────────────────────────────────────────
+
+model User {
+  id String @id @default(cuid())
+
+  fullName String
+  username String @unique
+  email    String @unique
+  phone    String
+  password String
+
+  role   UserRole
+  status AccountStatus @default(PENDING)
+
+  vendorProfile VendorProfile?
+  riderProfile  RiderProfile?
+
+  // ONLY RIDERS SHOULD HAVE A WALLET
+  wallet Wallet?
+
+  notifications Notification[]
+
+  referralsGiven   Referral[] @relation("UserReferrals")
+  referralReceived Referral?  @relation("UserReferred")
+
+  // WHATSAPP
+  whatsappConversations WhatsAppConversation[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ─────────────────────────────────────────────
+// VENDOR
+// ─────────────────────────────────────────────
+
+model VendorProfile {
+  id String @id @default(cuid())
+
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  businessName    String
+  businessType    String
+  businessAddress String
+
+  latitude  Float?
+  longitude Float?
+
+  deliveries Delivery[]
+
+  payments Payment[]
+
+  referralCode String? @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([referralCode])
+}
+
+// ─────────────────────────────────────────────
+// RIDER
+// ─────────────────────────────────────────────
+
+model RiderProfile {
+  id String @id @default(cuid())
+
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // ==============================
+  // VEHICLE & SERVICE AREA
+  // ==============================
+
+  vehicleNumber String
+  deliveryArea  String
+  licenseNumber String?
+
+  // ==============================
+  // BANK DETAILS
+  // ==============================
+
+  bankName      String?
+  accountNumber String?
+  accountName   String?
+
+  // ==============================
+  // RIDER VERIFICATION
+  // ==============================
+
+  ninNumber String? @unique
+  bvnNumber String? @unique
+
+  passportUrl String?
+  selfieUrl   String?
+
+  verificationDocumentType VerificationDocumentType?
+
+  verificationStatus VerificationStatus @default(PENDING)
+
+  isVerified Boolean @default(false)
+
+  verificationProvider  String?
+  verificationReference String?
+
+  verifiedAt DateTime?
+
+  // ==============================
+  // PERFORMANCE
+  // ==============================
+
+  rating Float @default(5.0)
+
+  totalDeliveries Int @default(0)
+
+  // ==============================
+  // AVAILABILITY
+  // ==============================
+
+  isAvailable Boolean @default(false)
+
+  // ==============================
+  // LIVE LOCATION
+  // ==============================
+
+  currentLatitude    Float?
+  currentLongitude   Float?
+  lastLocationUpdate DateTime?
+
+  // ==============================
+  // REFERRAL
+  // ==============================
+
+  referralCode String? @unique
+
+  // ==============================
+  // RELATIONS
+  // ==============================
+
+  deliveries       Delivery[]
+  deliveryRequests DeliveryRequest[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([referralCode])
+  @@index([verificationStatus])
+  @@index([isVerified])
+}
+
+// ─────────────────────────────────────────────
+// DELIVERIES
+// ─────────────────────────────────────────────
+
+model Delivery {
+  id String @id @default(cuid())
+
+  trackingId String @unique
+
+  vendorId String
+  vendor   VendorProfile @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
+  riderId String?
+  rider   RiderProfile? @relation(fields: [riderId], references: [id], onDelete: SetNull)
+
+  recipientName    String
+  recipientPhone   String
+  recipientAddress String
+
+  // COORDINATES FOR ROUTING & MAPS
+  pickupLatitude     Float?
+  pickupLongitude    Float?
+  recipientLatitude  Float?
+  recipientLongitude Float?
+  assignedAt         DateTime?
+
+  packageType          String
+  packageWeight        String?
+  deliveryInstructions String?
+  notified500m         Boolean @default(false)
+  notifiedArrived      Boolean @default(false)
+
+  // DELIVERY PRICING
+  riderFee    Float?
+  deliveryFee Float?
+
+  deliveryPin String?
+
+  status DeliveryStatus @default(PENDING)
+
+  deliveryRequests DeliveryRequest[]
+
+  payments       Payment[]
+  supportTickets SupportTicket[]
+
+  // WHATSAPP
+  whatsappConversations WhatsAppConversation[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([vendorId])
+  @@index([riderId])
+  @@index([status])
+}
+
+// ─────────────────────────────────────────────
+// PAYMENT
+// ─────────────────────────────────────────────
+
+model Payment {
+  id String @id @default(cuid())
+
+  deliveryId String
+  delivery   Delivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+
+  vendorId String
+  vendor   VendorProfile @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
+  amount   Float
+  currency String @default("NGN")
+
+  status PaymentStatus @default(PENDING)
+
+  method PaymentMethod @default(PAYSTACK)
+
+  // UNIQUE PAYSTACK PAYMENT REFERENCE
+  reference String @unique
+
+  // PAYSTACK TRANSACTION ID
+  gatewayTransactionId String?
+
+  // PAYSTACK CHECKOUT URL
+  authorizationUrl String?
+
+  paidAt   DateTime?
+  failedAt DateTime?
+
+  // RAW PAYSTACK RESPONSE DATA
+  metadata Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([deliveryId])
+  @@index([vendorId])
+  @@index([status])
+}
+
+// ─────────────────────────────────────────────
+// DELIVERY REQUESTS
+// ─────────────────────────────────────────────
+
+model DeliveryRequest {
+  id String @id @default(cuid())
+
+  deliveryId String
+  delivery   Delivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+
+  riderId String
+  rider   RiderProfile @relation(fields: [riderId], references: [id], onDelete: Cascade)
+
+  status DeliveryRequestStatus @default(PENDING)
+
+  distanceFromPickup Float?
+  expiresAt          DateTime?
+  respondedAt        DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([deliveryId, riderId])
+  @@index([riderId])
+  @@index([status])
+}
+
+// ─────────────────────────────────────────────
+// RIDER WALLET ONLY
+// ─────────────────────────────────────────────
+
+model Wallet {
+  id String @id @default(cuid())
+
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  balance  Float  @default(0.0)
+  currency String @default("NGN")
+
+  transactions WalletTransaction[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ─────────────────────────────────────────────
+// WALLET TRANSACTIONS
+// ─────────────────────────────────────────────
+
+model WalletTransaction {
+  id String @id @default(cuid())
+
+  walletId String
+  wallet   Wallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+
+  amount Float
+
+  type   TransactionType
+  status TransactionStatus @default(PENDING)
+
+  referenceId String?
+  description String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([walletId])
+  @@index([status])
+}
+
+// ─────────────────────────────────────────────
+// NOTIFICATIONS
+// ─────────────────────────────────────────────
+
+model Notification {
+  id String @id @default(cuid())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  deliveryId String?
+
+  title   String
+  message String
+  isRead  Boolean @default(false)
+  type    String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([isRead])
+  @@index([deliveryId])
+}
+
+// ─────────────────────────────────────────────
+// REFERRALS
+// ─────────────────────────────────────────────
+
+model Referral {
+  id String @id @default(cuid())
+
+  referrerId String
+  referrer   User   @relation("UserReferrals", fields: [referrerId], references: [id], onDelete: Cascade)
+
+  referredId String @unique
+  referred   User   @relation("UserReferred", fields: [referredId], references: [id], onDelete: Cascade)
+
+  status       ReferralStatus @default(PENDING)
+  rewardAmount Float          @default(0.0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([referrerId])
+  @@index([status])
+}
+
+// ─────────────────────────────────────────────
+// SUPPORT
+// ─────────────────────────────────────────────
+
+enum TicketStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+model SupportTicket {
+  id String @id @default(cuid())
+
+  fullName String
+  email    String
+  phone    String?
+
+  // Optional tracking ID string or link to Delivery model
+  trackingId String?
+  delivery   Delivery? @relation(fields: [trackingId], references: [trackingId], onDelete: SetNull)
+
+  subject String
+  message String
+
+  status TicketStatus @default(OPEN)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([email])
+  @@index([status])
+  @@index([trackingId])
+}
+
+// ─────────────────────────────────────────────
+// WHATSAPP CONVERSATIONS
+// ─────────────────────────────────────────────
+
+model WhatsAppConversation {
+  id String @id @default(cuid())
+
+  // WhatsApp phone number
+  // Example: 2348112780944
+  phoneNumber String @unique
+
+  // Optional CourierX user
+  // NULL when the person is only a recipient
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  // Optional delivery
+  // NULL when there is no delivery associated yet
+  deliveryId String?
+  delivery   Delivery? @relation(fields: [deliveryId], references: [id], onDelete: SetNull)
+
+  messages WhatsAppMessage[]
+
+  lastMessageAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([deliveryId])
+  @@index([lastMessageAt])
+}
+
+// ─────────────────────────────────────────────
+// WHATSAPP MESSAGES
+// ─────────────────────────────────────────────
+
+model WhatsAppMessage {
+  id String @id @default(cuid())
+
+  // Meta's WhatsApp message ID
+  whatsappMessageId String @unique
+
+  conversationId String
+  conversation   WhatsAppConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  direction WhatsAppMessageDirection
+
+  // text, image, document, location, interactive, etc.
+  messageType String
+
+  // Actual text message
+  message String?
+
+  status WhatsAppMessageStatus @default(RECEIVED)
+
+  // Meta timestamp
+  whatsappTimestamp DateTime?
+
+  // Template used for outgoing messages
+  templateName String?
+
+  // Complete raw webhook data from Meta
+  metadata Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([conversationId])
+  @@index([status])
+  @@index([direction])
+  @@index([createdAt])
+}
