@@ -5,6 +5,7 @@ generator client {
 
 datasource db {
   provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
 // ─────────────────────────────────────────────
@@ -16,6 +17,7 @@ enum UserRole {
   VENDOR
   RIDER
 }
+
 enum VerificationStatus {
   PENDING
   VERIFIED
@@ -35,7 +37,7 @@ enum DeliveryStatus {
   IN_TRANSIT
   DELIVERED
   CANCELLED
-  EXPIRED  // <-- Add this line
+  EXPIRED
 }
 
 enum DeliveryRequestStatus {
@@ -92,6 +94,23 @@ enum VerificationDocumentType {
 }
 
 // ─────────────────────────────────────────────
+// WHATSAPP ENUMS
+// ─────────────────────────────────────────────
+
+enum WhatsAppMessageDirection {
+  INCOMING
+  OUTGOING
+}
+
+enum WhatsAppMessageStatus {
+  RECEIVED
+  SENT
+  DELIVERED
+  READ
+  FAILED
+}
+
+// ─────────────────────────────────────────────
 // USER
 // ─────────────────────────────────────────────
 
@@ -118,9 +137,11 @@ model User {
   referralsGiven   Referral[] @relation("UserReferrals")
   referralReceived Referral?  @relation("UserReferred")
 
+  // WHATSAPP
+  whatsappConversations WhatsAppConversation[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-  
 }
 
 // ─────────────────────────────────────────────
@@ -143,9 +164,12 @@ model VendorProfile {
   deliveries Delivery[]
 
   payments Payment[]
-referralCode String? @unique
+
+  referralCode String? @unique
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
   @@index([referralCode])
 }
 
@@ -162,6 +186,7 @@ model RiderProfile {
   // ==============================
   // VEHICLE & SERVICE AREA
   // ==============================
+
   vehicleNumber String
   deliveryArea  String
   licenseNumber String?
@@ -169,6 +194,7 @@ model RiderProfile {
   // ==============================
   // BANK DETAILS
   // ==============================
+
   bankName      String?
   accountNumber String?
   accountName   String?
@@ -176,6 +202,7 @@ model RiderProfile {
   // ==============================
   // RIDER VERIFICATION
   // ==============================
+
   ninNumber   String? @unique
   bvnNumber   String? @unique
 
@@ -196,6 +223,7 @@ model RiderProfile {
   // ==============================
   // PERFORMANCE
   // ==============================
+
   rating Float @default(5.0)
 
   totalDeliveries Int @default(0)
@@ -203,11 +231,13 @@ model RiderProfile {
   // ==============================
   // AVAILABILITY
   // ==============================
+
   isAvailable Boolean @default(false)
 
   // ==============================
   // LIVE LOCATION
   // ==============================
+
   currentLatitude    Float?
   currentLongitude   Float?
   lastLocationUpdate DateTime?
@@ -215,11 +245,13 @@ model RiderProfile {
   // ==============================
   // REFERRAL
   // ==============================
+
   referralCode String? @unique
 
   // ==============================
   // RELATIONS
   // ==============================
+
   deliveries       Delivery[]
   deliveryRequests DeliveryRequest[]
 
@@ -260,8 +292,8 @@ model Delivery {
   packageType          String
   packageWeight        String?
   deliveryInstructions String?
-  notified500m         Boolean  @default(false)
-  notifiedArrived      Boolean  @default(false)
+  notified500m         Boolean @default(false)
+  notifiedArrived      Boolean @default(false)
 
   // DELIVERY PRICING
   riderFee    Float?
@@ -275,6 +307,9 @@ model Delivery {
 
   payments       Payment[]
   supportTickets SupportTicket[]
+
+  // WHATSAPP
+  whatsappConversations WhatsAppConversation[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -408,11 +443,11 @@ model Notification {
   userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  deliveryId String? // Plain string reference, no @relation needed
+  deliveryId String?
 
   title     String
   message   String
-  isRead    Boolean  @default(false)
+  isRead    Boolean @default(false)
   type      String?
 
   createdAt DateTime @default(now())
@@ -431,13 +466,13 @@ model Referral {
   id String @id @default(cuid())
 
   referrerId String
-  referrer   User   @relation("UserReferrals", fields: [referrerId], references: [id], onDelete: Cascade)
+  referrer   User @relation("UserReferrals", fields: [referrerId], references: [id], onDelete: Cascade)
 
   referredId String @unique
-  referred   User   @relation("UserReferred", fields: [referredId], references: [id], onDelete: Cascade)
+  referred   User @relation("UserReferred", fields: [referredId], references: [id], onDelete: Cascade)
 
   status       ReferralStatus @default(PENDING)
-  rewardAmount Float          @default(0.0)
+  rewardAmount Float @default(0.0)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -445,6 +480,10 @@ model Referral {
   @@index([referrerId])
   @@index([status])
 }
+
+// ─────────────────────────────────────────────
+// SUPPORT
+// ─────────────────────────────────────────────
 
 enum TicketStatus {
   OPEN
@@ -454,25 +493,99 @@ enum TicketStatus {
 }
 
 model SupportTicket {
-  id          String   @id @default(cuid())
-  
-  fullName    String
-  email       String
-  phone       String?
-  
-  // Optional tracking ID string or link to Delivery model
-  trackingId  String?
-  delivery    Delivery? @relation(fields: [trackingId], references: [trackingId], onDelete: SetNull)
-  
-  subject     String
-  message     String
-  
-  status      TicketStatus @default(OPEN)
+  id String @id @default(cuid())
 
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  fullName String
+  email    String
+  phone    String?
+
+  // Optional tracking ID string or link to Delivery model
+  trackingId String?
+  delivery   Delivery? @relation(fields: [trackingId], references: [trackingId], onDelete: SetNull)
+
+  subject String
+  message String
+
+  status TicketStatus @default(OPEN)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([email])
   @@index([status])
   @@index([trackingId])
+}
+
+// ─────────────────────────────────────────────
+// WHATSAPP CONVERSATIONS
+// ─────────────────────────────────────────────
+
+model WhatsAppConversation {
+  id String @id @default(cuid())
+
+  // WhatsApp phone number
+  // Example: 2348112780944
+  phoneNumber String @unique
+
+  // Optional CourierX user
+  // NULL when the person is only a recipient
+  userId String?
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  // Optional delivery
+  // NULL when there is no delivery associated yet
+  deliveryId String?
+  delivery Delivery? @relation(fields: [deliveryId], references: [id], onDelete: SetNull)
+
+  messages WhatsAppMessage[]
+
+  lastMessageAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([deliveryId])
+  @@index([lastMessageAt])
+}
+
+// ─────────────────────────────────────────────
+// WHATSAPP MESSAGES
+// ─────────────────────────────────────────────
+
+model WhatsAppMessage {
+  id String @id @default(cuid())
+
+  // Meta's WhatsApp message ID
+  whatsappMessageId String @unique
+
+  conversationId String
+  conversation WhatsAppConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  direction WhatsAppMessageDirection
+
+  // text, image, document, location, interactive, etc.
+  messageType String
+
+  // Actual text message
+  message String?
+
+  status WhatsAppMessageStatus @default(RECEIVED)
+
+  // Meta timestamp
+  whatsappTimestamp DateTime?
+
+  // Template used for outgoing messages
+  templateName String?
+
+  // Complete raw webhook data from Meta
+  metadata Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([conversationId])
+  @@index([status])
+  @@index([direction])
+  @@index([createdAt])
 }
