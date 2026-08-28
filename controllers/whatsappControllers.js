@@ -169,3 +169,50 @@ export const updateWhatsAppStatus = async (statusData) => {
     console.log(`Note: Outbound message ${statusData.id} not found in local DB for status update.`);
   }
 };
+/**
+ * Fetch all WhatsApp conversations ordered by latest message activity
+ */
+export const getWhatsAppConversations = async (req, res) => {
+  try {
+    const conversations = await prisma.whatsAppConversation.findMany({
+      orderBy: {
+        lastMessageAt: "desc",
+      },
+      include: {
+        messages: {
+          orderBy: {
+            whatsappTimestamp: "asc",
+          },
+        },
+      },
+    });
+
+    return res.status(200).json(conversations);
+  } catch (error) {
+    console.error("Error fetching conversations:", error);
+    return res.status(500).json({ error: "Failed to fetch conversations" });
+  }
+};
+
+/**
+ * Fetch all messages belonging to a specific conversation ID
+ */
+export const getWhatsAppMessages = async (req, res) => {
+  try {
+    const { conversationId } = req.params;
+
+    const messages = await prisma.whatsAppMessage.findMany({
+      where: {
+        conversationId: conversationId,
+      },
+      orderBy: {
+        whatsappTimestamp: "asc",
+      },
+    });
+
+    return res.status(200).json(messages);
+  } catch (error) {
+    console.error("Error fetching messages:", error);
+    return res.status(500).json({ error: "Failed to fetch messages" });
+  }
+};

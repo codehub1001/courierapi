@@ -1,5 +1,11 @@
 import express from "express";
-import { receiveWhatsAppMessage, sendWhatsAppMessage, updateWhatsAppStatus } from "../controllers/whatsappControllers.js";
+import { 
+  receiveWhatsAppMessage, 
+  sendWhatsAppMessage, 
+  updateWhatsAppStatus, 
+  getWhatsAppConversations, 
+  getWhatsAppMessages 
+} from "../controllers/whatsappControllers.js";
 
 const router = express.Router();
 
@@ -91,5 +97,13 @@ router.post("/send", async (req, res) => {
     return res.status(500).json({ error: error.message });
   }
 });
+
+/**
+ * =========================================================
+ * FETCH CONVERSATIONS & MESSAGES FOR FRONTEND
+ * =========================================================
+ */
+router.get("/conversations", getWhatsAppConversations);
+router.get("/conversations/:conversationId/messages", getWhatsAppMessages);
 
 export default router;
