@@ -21,6 +21,7 @@ import verifyRoutes from "./routes/verifyRoutes.js";
 import adminRoutes from "./routes/adminRoutes.js";
 import uploadRoutes from "./routes/uploadRoutes.js";
 import supportRoutes from "./routes/supportRoutes.js";
+import whatsappRoutes from "./routes/whatsappRoutes.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -91,6 +92,7 @@ app.use("/api/rider", riderRoutes);
 app.use("/api/upload", uploadRoutes);
 app.use("/api", verifyRoutes);
 app.use("/api/support", supportRoutes);
+app.use("/api/whatsapp", whatsappRoutes);
 
 app.get("/", (req, res) => {
   res.json({
