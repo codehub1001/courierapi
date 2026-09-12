@@ -606,18 +606,21 @@ export const getAdminOverview = async (req, res) => {
 export const getPaymentAnalytics = async (req, res) => {
   try {
     const today = new Date();
-    const thirtyDaysAgo = new Date();
+
+    // Standardized 30-day rolling window
+    const thirtyDaysAgo = new Date(today);
     thirtyDaysAgo.setDate(today.getDate() - 30);
     thirtyDaysAgo.setHours(0, 0, 0, 0);
 
     const leaderboardPeriod = req.query.leaderboardPeriod || "monthly";
     const sortMetric = req.query.vendorSort || "revenue";
 
-    let leaderboardStartDate = new Date();
+    // Leaderboard Start Date calculation (using rolling days to avoid JS month-edge bugs)
+    let leaderboardStartDate = new Date(today);
     if (leaderboardPeriod === "weekly") {
       leaderboardStartDate.setDate(today.getDate() - 7);
     } else if (leaderboardPeriod === "monthly") {
-      leaderboardStartDate.setMonth(today.getMonth() - 1);
+      leaderboardStartDate.setDate(today.getDate() - 30);
     } else {
       leaderboardStartDate = new Date(0); // All-time
     }
@@ -627,20 +630,23 @@ export const getPaymentAnalytics = async (req, res) => {
       completedFinancials,
       completedOrdersCount,
       pendingFinancials,
-      recentDeliveries,
+      recentDeliveriesAgg,
       rawVendorStats,
       rawRiderStats,
     ] = await Promise.all([
+      // Completed Deliveries Overview
       prisma.delivery.aggregate({
         _sum: { deliveryFee: true, riderFee: true },
         _avg: { deliveryFee: true },
         where: { status: "DELIVERED" },
       }),
 
+      // Total Completed Deliveries Count
       prisma.delivery.count({
         where: { status: "DELIVERED" },
       }),
 
+      // Pending Escrow / Deliveries in Transit
       prisma.delivery.aggregate({
         _sum: { deliveryFee: true, riderFee: true },
         where: {
@@ -648,78 +654,86 @@ export const getPaymentAnalytics = async (req, res) => {
         },
       }),
 
-      prisma.delivery.findMany({
-        where: {
-          status: "DELIVERED",
-          createdAt: { gte: thirtyDaysAgo },
-        },
-        select: {
-          deliveryFee: true,
-          riderFee: true,
-          createdAt: true,
-        },
-        orderBy: { createdAt: "asc" },
-      }),
+      // Direct SQL grouping to avoid loading thousands of delivery objects into Node memory
+      prisma.$queryRaw`
+        SELECT 
+          TO_CHAR("createdAt" AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS "date",
+          COALESCE(SUM("deliveryFee"), 0)::float AS "revenue",
+          COALESCE(SUM("riderFee"), 0)::float AS "riderPayouts",
+          COALESCE(SUM("deliveryFee" - "riderFee"), 0)::float AS "profit",
+          COUNT("id")::int AS "count"
+        FROM "Delivery"
+        WHERE "status" = 'DELIVERED' 
+          AND "createdAt" >= ${thirtyDaysAgo}
+        GROUP BY 1
+        ORDER BY 1 ASC
+      `,
 
+      // Vendor Groupings (Filtered at DB level for valid vendorId)
       prisma.delivery.groupBy({
         by: ["vendorId"],
         _sum: { deliveryFee: true },
         _count: { id: true },
         where: { 
           status: "DELIVERED",
+          vendorId: { not: null },
           createdAt: { gte: leaderboardStartDate }
         },
       }),
 
+      // Rider Groupings (Filtered at DB level for valid riderId and limited to top 5)
       prisma.delivery.groupBy({
         by: ["riderId"],
         _sum: { riderFee: true },
         _count: { id: true },
         where: { 
           status: "DELIVERED",
+          riderId: { not: null },
           createdAt: { gte: leaderboardStartDate }
         },
         orderBy: { _sum: { riderFee: "desc" } },
-        take: 10,
+        take: 5,
       }),
     ]);
 
-    const totalRevenue = completedFinancials?._sum?.deliveryFee || 0;
-    const totalRiderPayouts = completedFinancials?._sum?.riderFee || 0;
+    // Financial calculations
+    const totalRevenue = Number(completedFinancials?._sum?.deliveryFee || 0);
+    const totalRiderPayouts = Number(completedFinancials?._sum?.riderFee || 0);
     const grossProfit = totalRevenue - totalRiderPayouts;
-    const profitMargin = totalRevenue > 0 ? ((grossProfit / totalRevenue) * 100).toFixed(2) : 0;
+    const profitMargin = totalRevenue > 0 ? Number(((grossProfit / totalRevenue) * 100).toFixed(2)) : 0;
     
-    const pendingRevenue = pendingFinancials?._sum?.deliveryFee || 0;
-    const pendingRiderPayouts = pendingFinancials?._sum?.riderFee || 0;
+    const pendingRevenue = Number(pendingFinancials?._sum?.deliveryFee || 0);
+    const pendingRiderPayouts = Number(pendingFinancials?._sum?.riderFee || 0);
 
+    // Build complete 30-day time-series shell
     const dailyChartMap = {};
-    for (let i = 0; i <= 30; i++) {
+    for (let i = 30; i >= 0; i--) {
       const d = new Date(today);
       d.setDate(today.getDate() - i);
       const dateString = d.toISOString().split("T")[0];
       dailyChartMap[dateString] = { date: dateString, revenue: 0, riderPayouts: 0, profit: 0, count: 0 };
     }
 
-    (recentDeliveries || []).forEach((delivery) => {
-      if (!delivery?.createdAt) return;
-      const dateString = delivery.createdAt.toISOString().split("T")[0];
-      if (dailyChartMap[dateString]) {
-        const rev = delivery.deliveryFee || 0;
-        const payout = delivery.riderFee || 0;
-        dailyChartMap[dateString].revenue += rev;
-        dailyChartMap[dateString].riderPayouts += payout;
-        dailyChartMap[dateString].profit += (rev - payout);
-        dailyChartMap[dateString].count += 1;
+    // Populate actual DB aggregated values into chart map
+    (recentDeliveriesAgg || []).forEach((row) => {
+      if (dailyChartMap[row.date]) {
+        dailyChartMap[row.date] = {
+          date: row.date,
+          revenue: Number(row.revenue) || 0,
+          riderPayouts: Number(row.riderPayouts) || 0,
+          profit: Number(row.profit) || 0,
+          count: Number(row.count) || 0,
+        };
       }
     });
 
-    const chartData = Object.values(dailyChartMap).sort((a, b) => new Date(a.date) - new Date(b.date));
+    const chartData = Object.values(dailyChartMap).sort((a, b) => a.date.localeCompare(b.date));
 
-    const processedVendors = (rawVendorStats || [])
-      .filter((v) => v && v.vendorId !== null)
+    // Dynamic Vendor metric sorting and top-5 slice
+    const processedVendors = rawVendorStats
       .map((stat) => {
-        const totalRev = stat?._sum?.deliveryFee ? Number(stat._sum.deliveryFee) : 0;
-        const orderCount = stat?._count?.id ? Number(stat._count.id) : 0;
+        const totalRev = Number(stat._sum?.deliveryFee || 0);
+        const orderCount = Number(stat._count?.id || 0);
         const aov = orderCount > 0 ? Math.round(totalRev / orderCount) : 0;
 
         let primaryMetricValue = totalRev;
@@ -739,40 +753,42 @@ export const getPaymentAnalytics = async (req, res) => {
       .sort((a, b) => b.primaryMetricValue - a.primaryMetricValue)
       .slice(0, 5);
 
-    const topVendorStats = processedVendors;
-    const topRiderStats = (rawRiderStats || []).filter((r) => r && r.riderId !== null).slice(0, 5);
-
-    const vendorIds = topVendorStats.map((v) => v.vendorId);
-    const riderIds = topRiderStats.map((r) => r.riderId);
+    // Dynamic Profile hydration queries
+    const vendorIds = processedVendors.map((v) => v.vendorId);
+    const riderIds = rawRiderStats.map((r) => r.riderId);
 
     const [vendorsDetails, ridersDetails] = await Promise.all([
-      vendorIds.length > 0 ? prisma.vendorProfile.findMany({
-        where: { id: { in: vendorIds } },
-        select: { id: true, businessName: true },
-      }) : [],
-      riderIds.length > 0 ? prisma.riderProfile.findMany({
-        where: { id: { in: riderIds } },
-        select: { id: true, user: { select: { fullName: true } } },
-      }) : []
+      vendorIds.length > 0
+        ? prisma.vendorProfile.findMany({
+            where: { id: { in: vendorIds } },
+            select: { id: true, businessName: true },
+          })
+        : [],
+      riderIds.length > 0
+        ? prisma.riderProfile.findMany({
+            where: { id: { in: riderIds } },
+            select: { id: true, user: { select: { fullName: true } } },
+          })
+        : [],
     ]);
 
-    const topVendors = topVendorStats.map((stat) => {
+    const topVendors = processedVendors.map((stat) => {
       const vendor = vendorsDetails.find((v) => v.id === stat.vendorId);
       return {
         vendorId: stat.vendorId,
         businessName: vendor?.businessName || "Unknown Vendor",
-        primaryMetricValue: Number(stat.primaryMetricValue) || 0,
-        orderCount: Number(stat.orderCount) || 0,
+        primaryMetricValue: stat.primaryMetricValue,
+        orderCount: stat.orderCount,
       };
     });
 
-    const topRiders = topRiderStats.map((stat) => {
+    const topRiders = rawRiderStats.map((stat) => {
       const rider = ridersDetails.find((r) => r.id === stat.riderId);
       return {
         riderId: stat.riderId,
         riderName: rider?.user?.fullName || "Unknown Rider",
-        totalEarnings: stat?._sum?.riderFee ? Number(stat._sum.riderFee) : 0,
-        deliveriesCompleted: stat?._count?.id ? Number(stat._count.id) : 0,
+        totalEarnings: Number(stat._sum?.riderFee || 0),
+        deliveriesCompleted: Number(stat._count?.id || 0),
       };
     });
 
@@ -783,8 +799,8 @@ export const getPaymentAnalytics = async (req, res) => {
           totalRevenue,
           totalRiderPayouts,
           grossProfit,
-          profitMargin: parseFloat(profitMargin),
-          averageDeliveryFee: Math.round(completedFinancials?._avg?.deliveryFee || 0),
+          profitMargin,
+          averageDeliveryFee: Math.round(Number(completedFinancials?._avg?.deliveryFee || 0)),
         },
         pending: {
           totalPendingRevenue: pendingRevenue,
@@ -800,10 +816,9 @@ export const getPaymentAnalytics = async (req, res) => {
         analyticsInsights: {
           totalCompletedOrders: completedOrdersCount || 0,
           escrowVelocity: "Real-time",
-        }
+        },
       },
     });
-
   } catch (error) {
     console.error("Payment Analytics Error:", error);
     return res.status(500).json({
