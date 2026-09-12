@@ -6385,6 +6385,7 @@ export namespace Prisma {
     recipientName: string | null
     recipientPhone: string | null
     recipientAddress: string | null
+    pickupAddress: string | null
     pickupLatitude: number | null
     pickupLongitude: number | null
     recipientLatitude: number | null
@@ -6411,6 +6412,7 @@ export namespace Prisma {
     recipientName: string | null
     recipientPhone: string | null
     recipientAddress: string | null
+    pickupAddress: string | null
     pickupLatitude: number | null
     pickupLongitude: number | null
     recipientLatitude: number | null
@@ -6437,6 +6439,7 @@ export namespace Prisma {
     recipientName: number
     recipientPhone: number
     recipientAddress: number
+    pickupAddress: number
     pickupLatitude: number
     pickupLongitude: number
     recipientLatitude: number
@@ -6483,6 +6486,7 @@ export namespace Prisma {
     recipientName?: true
     recipientPhone?: true
     recipientAddress?: true
+    pickupAddress?: true
     pickupLatitude?: true
     pickupLongitude?: true
     recipientLatitude?: true
@@ -6509,6 +6513,7 @@ export namespace Prisma {
     recipientName?: true
     recipientPhone?: true
     recipientAddress?: true
+    pickupAddress?: true
     pickupLatitude?: true
     pickupLongitude?: true
     recipientLatitude?: true
@@ -6535,6 +6540,7 @@ export namespace Prisma {
     recipientName?: true
     recipientPhone?: true
     recipientAddress?: true
+    pickupAddress?: true
     pickupLatitude?: true
     pickupLongitude?: true
     recipientLatitude?: true
@@ -6648,6 +6654,7 @@ export namespace Prisma {
     recipientName: string
     recipientPhone: string
     recipientAddress: string
+    pickupAddress: string | null
     pickupLatitude: number | null
     pickupLongitude: number | null
     recipientLatitude: number | null
@@ -6693,6 +6700,7 @@ export namespace Prisma {
     recipientName?: boolean
     recipientPhone?: boolean
     recipientAddress?: boolean
+    pickupAddress?: boolean
     pickupLatitude?: boolean
     pickupLongitude?: boolean
     recipientLatitude?: boolean
@@ -6726,6 +6734,7 @@ export namespace Prisma {
     recipientName?: boolean
     recipientPhone?: boolean
     recipientAddress?: boolean
+    pickupAddress?: boolean
     pickupLatitude?: boolean
     pickupLongitude?: boolean
     recipientLatitude?: boolean
@@ -6754,6 +6763,7 @@ export namespace Prisma {
     recipientName?: boolean
     recipientPhone?: boolean
     recipientAddress?: boolean
+    pickupAddress?: boolean
     pickupLatitude?: boolean
     pickupLongitude?: boolean
     recipientLatitude?: boolean
@@ -6782,6 +6792,7 @@ export namespace Prisma {
     recipientName?: boolean
     recipientPhone?: boolean
     recipientAddress?: boolean
+    pickupAddress?: boolean
     pickupLatitude?: boolean
     pickupLongitude?: boolean
     recipientLatitude?: boolean
@@ -6800,7 +6811,7 @@ export namespace Prisma {
     updatedAt?: boolean
   }
 
-  export type DeliveryOmit<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = $Extensions.GetOmit<"id" | "trackingId" | "vendorId" | "riderId" | "recipientName" | "recipientPhone" | "recipientAddress" | "pickupLatitude" | "pickupLongitude" | "recipientLatitude" | "recipientLongitude" | "assignedAt" | "packageType" | "packageWeight" | "deliveryInstructions" | "notified500m" | "notifiedArrived" | "riderFee" | "deliveryFee" | "deliveryPin" | "status" | "createdAt" | "updatedAt", ExtArgs["result"]["delivery"]>
+  export type DeliveryOmit<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = $Extensions.GetOmit<"id" | "trackingId" | "vendorId" | "riderId" | "recipientName" | "recipientPhone" | "recipientAddress" | "pickupAddress" | "pickupLatitude" | "pickupLongitude" | "recipientLatitude" | "recipientLongitude" | "assignedAt" | "packageType" | "packageWeight" | "deliveryInstructions" | "notified500m" | "notifiedArrived" | "riderFee" | "deliveryFee" | "deliveryPin" | "status" | "createdAt" | "updatedAt", ExtArgs["result"]["delivery"]>
   export type DeliveryInclude<ExtArgs extends $Extensions.InternalArgs = $Extensions.DefaultArgs> = {
     vendor?: boolean | VendorProfileDefaultArgs<ExtArgs>
     rider?: boolean | Delivery$riderArgs<ExtArgs>
@@ -6837,6 +6848,7 @@ export namespace Prisma {
       recipientName: string
       recipientPhone: string
       recipientAddress: string
+      pickupAddress: string | null
       pickupLatitude: number | null
       pickupLongitude: number | null
       recipientLatitude: number | null
@@ -7289,6 +7301,7 @@ export namespace Prisma {
     readonly recipientName: FieldRef<"Delivery", 'String'>
     readonly recipientPhone: FieldRef<"Delivery", 'String'>
     readonly recipientAddress: FieldRef<"Delivery", 'String'>
+    readonly pickupAddress: FieldRef<"Delivery", 'String'>
     readonly pickupLatitude: FieldRef<"Delivery", 'Float'>
     readonly pickupLongitude: FieldRef<"Delivery", 'Float'>
     readonly recipientLatitude: FieldRef<"Delivery", 'Float'>
@@ -18261,6 +18274,7 @@ export namespace Prisma {
     recipientName: 'recipientName',
     recipientPhone: 'recipientPhone',
     recipientAddress: 'recipientAddress',
+    pickupAddress: 'pickupAddress',
     pickupLatitude: 'pickupLatitude',
     pickupLongitude: 'pickupLongitude',
     recipientLatitude: 'recipientLatitude',
@@ -19112,6 +19126,7 @@ export namespace Prisma {
     recipientName?: StringFilter<"Delivery"> | string
     recipientPhone?: StringFilter<"Delivery"> | string
     recipientAddress?: StringFilter<"Delivery"> | string
+    pickupAddress?: StringNullableFilter<"Delivery"> | string | null
     pickupLatitude?: FloatNullableFilter<"Delivery"> | number | null
     pickupLongitude?: FloatNullableFilter<"Delivery"> | number | null
     recipientLatitude?: FloatNullableFilter<"Delivery"> | number | null
@@ -19144,6 +19159,7 @@ export namespace Prisma {
     recipientName?: SortOrder
     recipientPhone?: SortOrder
     recipientAddress?: SortOrder
+    pickupAddress?: SortOrderInput | SortOrder
     pickupLatitude?: SortOrderInput | SortOrder
     pickupLongitude?: SortOrderInput | SortOrder
     recipientLatitude?: SortOrderInput | SortOrder
@@ -19179,6 +19195,7 @@ export namespace Prisma {
     recipientName?: StringFilter<"Delivery"> | string
     recipientPhone?: StringFilter<"Delivery"> | string
     recipientAddress?: StringFilter<"Delivery"> | string
+    pickupAddress?: StringNullableFilter<"Delivery"> | string | null
     pickupLatitude?: FloatNullableFilter<"Delivery"> | number | null
     pickupLongitude?: FloatNullableFilter<"Delivery"> | number | null
     recipientLatitude?: FloatNullableFilter<"Delivery"> | number | null
@@ -19211,6 +19228,7 @@ export namespace Prisma {
     recipientName?: SortOrder
     recipientPhone?: SortOrder
     recipientAddress?: SortOrder
+    pickupAddress?: SortOrderInput | SortOrder
     pickupLatitude?: SortOrderInput | SortOrder
     pickupLongitude?: SortOrderInput | SortOrder
     recipientLatitude?: SortOrderInput | SortOrder
@@ -19245,6 +19263,7 @@ export namespace Prisma {
     recipientName?: StringWithAggregatesFilter<"Delivery"> | string
     recipientPhone?: StringWithAggregatesFilter<"Delivery"> | string
     recipientAddress?: StringWithAggregatesFilter<"Delivery"> | string
+    pickupAddress?: StringNullableWithAggregatesFilter<"Delivery"> | string | null
     pickupLatitude?: FloatNullableWithAggregatesFilter<"Delivery"> | number | null
     pickupLongitude?: FloatNullableWithAggregatesFilter<"Delivery"> | number | null
     recipientLatitude?: FloatNullableWithAggregatesFilter<"Delivery"> | number | null
@@ -20422,6 +20441,7 @@ export namespace Prisma {
     recipientName: string
     recipientPhone: string
     recipientAddress: string
+    pickupAddress?: string | null
     pickupLatitude?: number | null
     pickupLongitude?: number | null
     recipientLatitude?: number | null
@@ -20454,6 +20474,7 @@ export namespace Prisma {
     recipientName: string
     recipientPhone: string
     recipientAddress: string
+    pickupAddress?: string | null
     pickupLatitude?: number | null
     pickupLongitude?: number | null
     recipientLatitude?: number | null
@@ -20482,6 +20503,7 @@ export namespace Prisma {
     recipientName?: StringFieldUpdateOperationsInput | string
     recipientPhone?: StringFieldUpdateOperationsInput | string
     recipientAddress?: StringFieldUpdateOperationsInput | string
+    pickupAddress?: NullableStringFieldUpdateOperationsInput | string | null
     pickupLatitude?: NullableFloatFieldUpdateOperationsInput | number | null
     pickupLongitude?: NullableFloatFieldUpdateOperationsInput | number | null
     recipientLatitude?: NullableFloatFieldUpdateOperationsInput | number | null
@@ -20514,6 +20536,7 @@ export namespace Prisma {
     recipientName?: StringFieldUpdateOperationsInput | string
     recipientPhone?: StringFieldUpdateOperationsInput | string
     recipientAddress?: StringFieldUpdateOperationsInput | string
+    pickupAddress?: NullableStringFieldUpdateOperationsInput | string | null
     pickupLatitude?: NullableFloatFieldUpdateOperationsInput | number | null
     pickupLongitude?: NullableFloatFieldUpdateOperationsInput | number | null
     recipientLatitude?: NullableFloatFieldUpdateOperationsInput | number | null
@@ -20544,6 +20567,7 @@ export namespace Prisma {
     recipientName: string
     recipientPhone: string
     recipientAddress: string
+    pickupAddress?: string | null
     pickupLatitude?: number | null
     pickupLongitude?: number | null
     recipientLatitude?: number | null
@@ -20568,6 +20592,7 @@ export namespace Prisma {
     recipientName?: StringFieldUpdateOperationsInput | string
     recipientPhone?: StringFieldUpdateOperationsInput | string
     recipientAddress?: StringFieldUpdateOperationsInput | string
+    pickupAddress?: NullableStringFieldUpdateOperationsInput | string | null
     pickupLatitude?: NullableFloatFieldUpdateOperationsInput | number | null
     pickupLongitude?: NullableFloatFieldUpdateOperationsInput | number | null
     recipientLatitude?: NullableFloatFieldUpdateOperationsInput | number | null
@@ -20594,6 +20619,7 @@ export namespace Prisma {
     recipientName?: StringFieldUpdateOperationsInput | string
     recipientPhone?: StringFieldUpdateOperationsInput | string
     recipientAddress?: StringFieldUpdateOperationsInput | string
+    pickupAddress?: NullableStringFieldUpdateOperationsInput | string | null
     pickupLatitude?: NullableFloatFieldUpdateOperationsInput | number | null
     pickupLongitude?: NullableFloatFieldUpdateOperationsInput | number | null
     recipientLatitude?: NullableFloatFieldUpdateOperationsInput | number | null
@@ -21974,6 +22000,7 @@ export namespace Prisma {
     recipientName?: SortOrder
     recipientPhone?: SortOrder
     recipientAddress?: SortOrder
+    pickupAddress?: SortOrder
     pickupLatitude?: SortOrder
     pickupLongitude?: SortOrder
     recipientLatitude?: SortOrder
@@ -22009,6 +22036,7 @@ export namespace Prisma {
     recipientName?: SortOrder
     recipientPhone?: SortOrder
     recipientAddress?: SortOrder
+    pickupAddress?: SortOrder
     pickupLatitude?: SortOrder
     pickupLongitude?: SortOrder
     recipientLatitude?: SortOrder
@@ -22035,6 +22063,7 @@ export namespace Prisma {
     recipientName?: SortOrder
     recipientPhone?: SortOrder
     recipientAddress?: SortOrder
+    pickupAddress?: SortOrder
     pickupLatitude?: SortOrder
     pickupLongitude?: SortOrder
     recipientLatitude?: SortOrder
@@ -24740,6 +24769,7 @@ export namespace Prisma {
     recipientName: string
     recipientPhone: string
     recipientAddress: string
+    pickupAddress?: string | null
     pickupLatitude?: number | null
     pickupLongitude?: number | null
     recipientLatitude?: number | null
@@ -24770,6 +24800,7 @@ export namespace Prisma {
     recipientName: string
     recipientPhone: string
     recipientAddress: string
+    pickupAddress?: string | null
     pickupLatitude?: number | null
     pickupLongitude?: number | null
     recipientLatitude?: number | null
@@ -24922,6 +24953,7 @@ export namespace Prisma {
     recipientName?: StringFilter<"Delivery"> | string
     recipientPhone?: StringFilter<"Delivery"> | string
     recipientAddress?: StringFilter<"Delivery"> | string
+    pickupAddress?: StringNullableFilter<"Delivery"> | string | null
     pickupLatitude?: FloatNullableFilter<"Delivery"> | number | null
     pickupLongitude?: FloatNullableFilter<"Delivery"> | number | null
     recipientLatitude?: FloatNullableFilter<"Delivery"> | number | null
@@ -25026,6 +25058,7 @@ export namespace Prisma {
     recipientName: string
     recipientPhone: string
     recipientAddress: string
+    pickupAddress?: string | null
     pickupLatitude?: number | null
     pickupLongitude?: number | null
     recipientLatitude?: number | null
@@ -25056,6 +25089,7 @@ export namespace Prisma {
     recipientName: string
     recipientPhone: string
     recipientAddress: string
+    pickupAddress?: string | null
     pickupLatitude?: number | null
     pickupLongitude?: number | null
     recipientLatitude?: number | null
@@ -25654,6 +25688,7 @@ export namespace Prisma {
     recipientName: string
     recipientPhone: string
     recipientAddress: string
+    pickupAddress?: string | null
     pickupLatitude?: number | null
     pickupLongitude?: number | null
     recipientLatitude?: number | null
@@ -25685,6 +25720,7 @@ export namespace Prisma {
     recipientName: string
     recipientPhone: string
     recipientAddress: string
+    pickupAddress?: string | null
     pickupLatitude?: number | null
     pickupLongitude?: number | null
     recipientLatitude?: number | null
@@ -25761,6 +25797,7 @@ export namespace Prisma {
     recipientName?: StringFieldUpdateOperationsInput | string
     recipientPhone?: StringFieldUpdateOperationsInput | string
     recipientAddress?: StringFieldUpdateOperationsInput | string
+    pickupAddress?: NullableStringFieldUpdateOperationsInput | string | null
     pickupLatitude?: NullableFloatFieldUpdateOperationsInput | number | null
     pickupLongitude?: NullableFloatFieldUpdateOperationsInput | number | null
     recipientLatitude?: NullableFloatFieldUpdateOperationsInput | number | null
@@ -25792,6 +25829,7 @@ export namespace Prisma {
     recipientName?: StringFieldUpdateOperationsInput | string
     recipientPhone?: StringFieldUpdateOperationsInput | string
     recipientAddress?: StringFieldUpdateOperationsInput | string
+    pickupAddress?: NullableStringFieldUpdateOperationsInput | string | null
     pickupLatitude?: NullableFloatFieldUpdateOperationsInput | number | null
     pickupLongitude?: NullableFloatFieldUpdateOperationsInput | number | null
     recipientLatitude?: NullableFloatFieldUpdateOperationsInput | number | null
@@ -25858,6 +25896,7 @@ export namespace Prisma {
     recipientName: string
     recipientPhone: string
     recipientAddress: string
+    pickupAddress?: string | null
     pickupLatitude?: number | null
     pickupLongitude?: number | null
     recipientLatitude?: number | null
@@ -25889,6 +25928,7 @@ export namespace Prisma {
     recipientName: string
     recipientPhone: string
     recipientAddress: string
+    pickupAddress?: string | null
     pickupLatitude?: number | null
     pickupLongitude?: number | null
     recipientLatitude?: number | null
@@ -25999,6 +26039,7 @@ export namespace Prisma {
     recipientName?: StringFieldUpdateOperationsInput | string
     recipientPhone?: StringFieldUpdateOperationsInput | string
     recipientAddress?: StringFieldUpdateOperationsInput | string
+    pickupAddress?: NullableStringFieldUpdateOperationsInput | string | null
     pickupLatitude?: NullableFloatFieldUpdateOperationsInput | number | null
     pickupLongitude?: NullableFloatFieldUpdateOperationsInput | number | null
     recipientLatitude?: NullableFloatFieldUpdateOperationsInput | number | null
@@ -26030,6 +26071,7 @@ export namespace Prisma {
     recipientName?: StringFieldUpdateOperationsInput | string
     recipientPhone?: StringFieldUpdateOperationsInput | string
     recipientAddress?: StringFieldUpdateOperationsInput | string
+    pickupAddress?: NullableStringFieldUpdateOperationsInput | string | null
     pickupLatitude?: NullableFloatFieldUpdateOperationsInput | number | null
     pickupLongitude?: NullableFloatFieldUpdateOperationsInput | number | null
     recipientLatitude?: NullableFloatFieldUpdateOperationsInput | number | null
@@ -26613,6 +26655,7 @@ export namespace Prisma {
     recipientName: string
     recipientPhone: string
     recipientAddress: string
+    pickupAddress?: string | null
     pickupLatitude?: number | null
     pickupLongitude?: number | null
     recipientLatitude?: number | null
@@ -26644,6 +26687,7 @@ export namespace Prisma {
     recipientName: string
     recipientPhone: string
     recipientAddress: string
+    pickupAddress?: string | null
     pickupLatitude?: number | null
     pickupLongitude?: number | null
     recipientLatitude?: number | null
@@ -26687,6 +26731,7 @@ export namespace Prisma {
     recipientName?: StringFieldUpdateOperationsInput | string
     recipientPhone?: StringFieldUpdateOperationsInput | string
     recipientAddress?: StringFieldUpdateOperationsInput | string
+    pickupAddress?: NullableStringFieldUpdateOperationsInput | string | null
     pickupLatitude?: NullableFloatFieldUpdateOperationsInput | number | null
     pickupLongitude?: NullableFloatFieldUpdateOperationsInput | number | null
     recipientLatitude?: NullableFloatFieldUpdateOperationsInput | number | null
@@ -26718,6 +26763,7 @@ export namespace Prisma {
     recipientName?: StringFieldUpdateOperationsInput | string
     recipientPhone?: StringFieldUpdateOperationsInput | string
     recipientAddress?: StringFieldUpdateOperationsInput | string
+    pickupAddress?: NullableStringFieldUpdateOperationsInput | string | null
     pickupLatitude?: NullableFloatFieldUpdateOperationsInput | number | null
     pickupLongitude?: NullableFloatFieldUpdateOperationsInput | number | null
     recipientLatitude?: NullableFloatFieldUpdateOperationsInput | number | null
@@ -26788,6 +26834,7 @@ export namespace Prisma {
     recipientName: string
     recipientPhone: string
     recipientAddress: string
+    pickupAddress?: string | null
     pickupLatitude?: number | null
     pickupLongitude?: number | null
     recipientLatitude?: number | null
@@ -26819,6 +26866,7 @@ export namespace Prisma {
     recipientName: string
     recipientPhone: string
     recipientAddress: string
+    pickupAddress?: string | null
     pickupLatitude?: number | null
     pickupLongitude?: number | null
     recipientLatitude?: number | null
@@ -26949,6 +26997,7 @@ export namespace Prisma {
     recipientName?: StringFieldUpdateOperationsInput | string
     recipientPhone?: StringFieldUpdateOperationsInput | string
     recipientAddress?: StringFieldUpdateOperationsInput | string
+    pickupAddress?: NullableStringFieldUpdateOperationsInput | string | null
     pickupLatitude?: NullableFloatFieldUpdateOperationsInput | number | null
     pickupLongitude?: NullableFloatFieldUpdateOperationsInput | number | null
     recipientLatitude?: NullableFloatFieldUpdateOperationsInput | number | null
@@ -26980,6 +27029,7 @@ export namespace Prisma {
     recipientName?: StringFieldUpdateOperationsInput | string
     recipientPhone?: StringFieldUpdateOperationsInput | string
     recipientAddress?: StringFieldUpdateOperationsInput | string
+    pickupAddress?: NullableStringFieldUpdateOperationsInput | string | null
     pickupLatitude?: NullableFloatFieldUpdateOperationsInput | number | null
     pickupLongitude?: NullableFloatFieldUpdateOperationsInput | number | null
     recipientLatitude?: NullableFloatFieldUpdateOperationsInput | number | null
@@ -27216,6 +27266,7 @@ export namespace Prisma {
     recipientName: string
     recipientPhone: string
     recipientAddress: string
+    pickupAddress?: string | null
     pickupLatitude?: number | null
     pickupLongitude?: number | null
     recipientLatitude?: number | null
@@ -27257,6 +27308,7 @@ export namespace Prisma {
     recipientName?: StringFieldUpdateOperationsInput | string
     recipientPhone?: StringFieldUpdateOperationsInput | string
     recipientAddress?: StringFieldUpdateOperationsInput | string
+    pickupAddress?: NullableStringFieldUpdateOperationsInput | string | null
     pickupLatitude?: NullableFloatFieldUpdateOperationsInput | number | null
     pickupLongitude?: NullableFloatFieldUpdateOperationsInput | number | null
     recipientLatitude?: NullableFloatFieldUpdateOperationsInput | number | null
@@ -27287,6 +27339,7 @@ export namespace Prisma {
     recipientName?: StringFieldUpdateOperationsInput | string
     recipientPhone?: StringFieldUpdateOperationsInput | string
     recipientAddress?: StringFieldUpdateOperationsInput | string
+    pickupAddress?: NullableStringFieldUpdateOperationsInput | string | null
     pickupLatitude?: NullableFloatFieldUpdateOperationsInput | number | null
     pickupLongitude?: NullableFloatFieldUpdateOperationsInput | number | null
     recipientLatitude?: NullableFloatFieldUpdateOperationsInput | number | null
@@ -27316,6 +27369,7 @@ export namespace Prisma {
     recipientName?: StringFieldUpdateOperationsInput | string
     recipientPhone?: StringFieldUpdateOperationsInput | string
     recipientAddress?: StringFieldUpdateOperationsInput | string
+    pickupAddress?: NullableStringFieldUpdateOperationsInput | string | null
     pickupLatitude?: NullableFloatFieldUpdateOperationsInput | number | null
     pickupLongitude?: NullableFloatFieldUpdateOperationsInput | number | null
     recipientLatitude?: NullableFloatFieldUpdateOperationsInput | number | null
@@ -27392,6 +27446,7 @@ export namespace Prisma {
     recipientName: string
     recipientPhone: string
     recipientAddress: string
+    pickupAddress?: string | null
     pickupLatitude?: number | null
     pickupLongitude?: number | null
     recipientLatitude?: number | null
@@ -27427,6 +27482,7 @@ export namespace Prisma {
     recipientName?: StringFieldUpdateOperationsInput | string
     recipientPhone?: StringFieldUpdateOperationsInput | string
     recipientAddress?: StringFieldUpdateOperationsInput | string
+    pickupAddress?: NullableStringFieldUpdateOperationsInput | string | null
     pickupLatitude?: NullableFloatFieldUpdateOperationsInput | number | null
     pickupLongitude?: NullableFloatFieldUpdateOperationsInput | number | null
     recipientLatitude?: NullableFloatFieldUpdateOperationsInput | number | null
@@ -27457,6 +27513,7 @@ export namespace Prisma {
     recipientName?: StringFieldUpdateOperationsInput | string
     recipientPhone?: StringFieldUpdateOperationsInput | string
     recipientAddress?: StringFieldUpdateOperationsInput | string
+    pickupAddress?: NullableStringFieldUpdateOperationsInput | string | null
     pickupLatitude?: NullableFloatFieldUpdateOperationsInput | number | null
     pickupLongitude?: NullableFloatFieldUpdateOperationsInput | number | null
     recipientLatitude?: NullableFloatFieldUpdateOperationsInput | number | null
@@ -27486,6 +27543,7 @@ export namespace Prisma {
     recipientName?: StringFieldUpdateOperationsInput | string
     recipientPhone?: StringFieldUpdateOperationsInput | string
     recipientAddress?: StringFieldUpdateOperationsInput | string
+    pickupAddress?: NullableStringFieldUpdateOperationsInput | string | null
     pickupLatitude?: NullableFloatFieldUpdateOperationsInput | number | null
     pickupLongitude?: NullableFloatFieldUpdateOperationsInput | number | null
     recipientLatitude?: NullableFloatFieldUpdateOperationsInput | number | null

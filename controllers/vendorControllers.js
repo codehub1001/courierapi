@@ -212,6 +212,9 @@ export const createDelivery = async (req, res) => {
       deliveryInstructions,
       isPeakHour = false,
 
+      // 📍 CUSTOM PICKUP (Optional: overrides vendor default profile address)
+      pickupAddress: customPickupAddress,
+
       // PRICE CONFIRMATION
       confirmed = false,
     } = req.body;
@@ -259,28 +262,30 @@ export const createDelivery = async (req, res) => {
     }
 
     // =====================================================
-    // 3. VALIDATE BUSINESS ADDRESS
+    // 3. DETERMINE & VALIDATE ACTIVE PICKUP ADDRESS
     // =====================================================
-    if (!vendor.businessAddress?.trim()) {
-      console.log("❌ Vendor Error: Business address is missing.");
+    const activePickupAddress = customPickupAddress?.trim() || vendor.businessAddress;
+
+    if (!activePickupAddress) {
+      console.log("❌ Address Error: Pickup address is missing.");
 
       return res.status(400).json({
         success: false,
         message:
-          "Your business address is required before creating a delivery",
+          "A valid pickup address is required before creating a delivery",
       });
     }
 
     // =====================================================
     // 4. GEOCODE PICKUP LOCATION
     // =====================================================
-    console.log("📍 Geocoding vendor address:", vendor.businessAddress);
+    console.log("📍 Geocoding pickup address:", activePickupAddress);
 
-    let pickupLocation = await geocodeAddress(vendor.businessAddress);
+    let pickupLocation = await geocodeAddress(activePickupAddress);
 
     if (!pickupLocation) {
       console.log(
-        "⚠️ Geocoding failed for Business Address. Using fallback coordinates."
+        "⚠️ Geocoding failed for pickup address. Using fallback coordinates."
       );
 
       pickupLocation = {
@@ -290,8 +295,8 @@ export const createDelivery = async (req, res) => {
       };
     }
 
-    // Update vendor profile coordinates if missing
-    if (!vendor.latitude || !vendor.longitude) {
+    // Update default vendor profile coordinates only if they were missing and default address was used
+    if (!customPickupAddress && (!vendor.latitude || !vendor.longitude)) {
       await prisma.vendorProfile.update({
         where: { id: vendor.id },
         data: {
@@ -405,7 +410,8 @@ export const createDelivery = async (req, res) => {
         recipientPhone: recipientPhone.trim(),
         recipientAddress: cleanedRecipientAddress,
 
-        // 📍 STORED COORDINATES FOR GEOFENCING & ETA CALCULATIONS
+        // 📍 STORED PICKUP & DROPOFF DATA
+        pickupAddress: activePickupAddress,
         pickupLatitude: pickupLocation.latitude,
         pickupLongitude: pickupLocation.longitude,
         recipientLatitude: deliveryLocation.latitude,

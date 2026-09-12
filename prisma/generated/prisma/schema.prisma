@@ -283,6 +283,7 @@ model Delivery {
   recipientAddress String
 
   // COORDINATES FOR ROUTING & MAPS
+  pickupAddress      String?
   pickupLatitude     Float?
   pickupLongitude    Float?
   recipientLatitude  Float?

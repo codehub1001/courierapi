@@ -185,6 +185,7 @@ exports.Prisma.DeliveryScalarFieldEnum = {
   recipientName: 'recipientName',
   recipientPhone: 'recipientPhone',
   recipientAddress: 'recipientAddress',
+  pickupAddress: 'pickupAddress',
   pickupLatitude: 'pickupLatitude',
   pickupLongitude: 'pickupLongitude',
   recipientLatitude: 'recipientLatitude',
