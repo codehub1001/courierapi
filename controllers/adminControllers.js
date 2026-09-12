@@ -603,8 +603,6 @@ export const getAdminOverview = async (req, res) => {
     });
   }
 };
-import { PrismaClient } from "@prisma/client";
-const prisma = new PrismaClient();
 
 export const getPaymentAnalytics = async (req, res) => {
   try {
