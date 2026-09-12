@@ -10,9 +10,10 @@ export const getRoadRoute = async (
       `${destinationLongitude},${destinationLatitude}`,
     ].join(";");
 
+    // Request full GeoJSON geometries so Leaflet can draw actual street turns
     const url =
       `https://router.project-osrm.org/route/v1/driving/${coordinates}` +
-      `?overview=false&steps=false`;
+      `?overview=full&geometries=geojson&steps=false`;
 
     const response = await fetch(url, {
       headers: {
@@ -37,13 +38,13 @@ export const getRoadRoute = async (
     }
 
     const route = data.routes[0];
-
-    // Apply a buffer multiplier (e.g., 1.6x) for city traffic, stops, and realistic riding speeds
     const bufferedDurationSeconds = route.duration * 1.6;
 
     return {
       distanceMeters: route.distance,
       durationSeconds: bufferedDurationSeconds,
+      // OSRM returns coordinates as [longitude, latitude], Leaflet needs [latitude, longitude]
+      coordinates: route.geometry.coordinates.map(([lng, lat]) => [lat, lng]),
     };
   } catch (error) {
     console.error("Road routing error:", error);

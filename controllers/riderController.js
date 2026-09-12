@@ -33,7 +33,7 @@ export const getRiderProfile = async (req, res) => {
     }
 
     // --- DEBUG LOG: Check what is actually being sent to the frontend ---
-    console.log("SENDING RIDER TO FRONTEND -> isVerified:", rider.isVerified);
+    // console.log("SENDING RIDER TO FRONTEND -> isVerified:", rider.isVerified);
 
     // Fetch completed deliveries count dynamically
     const completedDeliveries = await prisma.delivery.count({
