@@ -666,7 +666,6 @@ export const getPaymentAnalytics = async (req, res) => {
     chartStartDate.setUTCDate(today.getUTCDate() - chartDays);
     chartStartDate.setUTCHours(0, 0, 0, 0);
 
-    // Schema Enum References (Using plain string literals to bypass ESM export mismatch with @prisma/client)
     const completedStatuses = ["DELIVERED"];
     const pendingStatuses = [
       "PENDING",
@@ -675,22 +674,26 @@ export const getPaymentAnalytics = async (req, res) => {
       "IN_TRANSIT",
     ];
 
-    // 3. Parallel Aggregations
+    // 3. Parallel Aggregations (Pulling Revenue from the Payment Model & Payouts from Delivery)
     const [
-      completedFinancials,
+      completedPaymentsAgg,
       completedOrdersCount,
-      pendingFinancials,
+      completedRiderFeesAgg,
+      pendingPaymentsAgg,
       recentDeliveriesAgg,
       rawVendorStats,
       rawRiderStats,
     ] = await Promise.all([
-      // Financials for completed orders
-      prisma.delivery.aggregate({
-        _sum: { deliveryFee: true, riderFee: true },
-        _avg: { deliveryFee: true, riderFee: true },
+      // Total Gross Revenue from successful payments tied to delivered orders
+      prisma.payment.aggregate({
+        _sum: { amount: true },
+        _avg: { amount: true },
         where: {
-          status: { in: completedStatuses },
-          createdAt: { gte: timeframeStartDate },
+          status: "SUCCESS",
+          delivery: {
+            status: { in: completedStatuses },
+            createdAt: { gte: timeframeStartDate },
+          },
         },
       }),
 
@@ -702,37 +705,54 @@ export const getPaymentAnalytics = async (req, res) => {
         },
       }),
 
-      // Active Escrow / Funds in Transit
+      // Rider payouts for completed orders
       prisma.delivery.aggregate({
-        _sum: { deliveryFee: true, riderFee: true },
+        _sum: { riderFee: true },
+        _avg: { riderFee: true },
         where: {
-          status: { in: pendingStatuses },
+          status: { in: completedStatuses },
+          createdAt: { gte: timeframeStartDate },
         },
       }),
 
-      // Time-series chart query
+      // Active Escrow / Funds in Transit (Pending payments)
+      prisma.payment.aggregate({
+        _sum: { amount: true },
+        where: {
+          status: { in: ["PENDING", "SUCCESS"] },
+          delivery: {
+            status: { in: pendingStatuses },
+          },
+        },
+      }),
+
+      // Time-series chart query pulling actual payment amounts joined with delivery dates
       prisma.$queryRaw`
         SELECT 
-          TO_CHAR("createdAt" AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS "date",
-          COALESCE(SUM(COALESCE("deliveryFee", 0)), 0)::float AS "revenue",
-          COALESCE(SUM(COALESCE("riderFee", 0)), 0)::float AS "payouts",
-          COALESCE(SUM(COALESCE("deliveryFee", 0) - COALESCE("riderFee", 0)), 0)::float AS "profit",
-          COUNT("id")::int AS "orders"
-        FROM "Delivery"
-        WHERE "status"::text = 'DELIVERED'
-          AND "createdAt" >= ${chartStartDate}
+          TO_CHAR(d."createdAt" AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS "date",
+          COALESCE(SUM(COALESCE(p."amount", 0)), 0)::float AS "revenue",
+          COALESCE(SUM(COALESCE(d."riderFee", 0)), 0)::float AS "payouts",
+          COALESCE(SUM(COALESCE(p."amount", 0) - COALESCE(d."riderFee", 0)), 0)::float AS "profit",
+          COUNT(d."id")::int AS "orders"
+        FROM "Delivery" d
+        LEFT JOIN "Payment" p ON p."deliveryId" = d."id" AND p."status" = 'SUCCESS'
+        WHERE d."status"::text = 'DELIVERED'
+          AND d."createdAt" >= ${chartStartDate}
         GROUP BY 1
         ORDER BY 1 ASC
       `,
 
-      // Vendor stats
-      prisma.delivery.groupBy({
+      // Vendor stats based on successful payments
+      prisma.payment.groupBy({
         by: ["vendorId"],
-        _sum: { deliveryFee: true },
+        _sum: { amount: true },
         _count: { id: true },
         where: {
-          status: { in: completedStatuses },
-          createdAt: { gte: leaderboardStartDate },
+          status: "SUCCESS",
+          delivery: {
+            status: { in: completedStatuses },
+            createdAt: { gte: leaderboardStartDate },
+          },
         },
       }),
 
@@ -752,8 +772,8 @@ export const getPaymentAnalytics = async (req, res) => {
     ]);
 
     // Financial calculations
-    const totalRevenue = Number(completedFinancials?._sum?.deliveryFee || 0);
-    const totalRiderPayouts = Number(completedFinancials?._sum?.riderFee || 0);
+    const totalRevenue = Number(completedPaymentsAgg?._sum?.amount || 0);
+    const totalRiderPayouts = Number(completedRiderFeesAgg?._sum?.riderFee || 0);
     const systemFeeProfit = totalRevenue - totalRiderPayouts;
     const platformRevenue = systemFeeProfit;
     const grossProfit = systemFeeProfit;
@@ -763,17 +783,17 @@ export const getPaymentAnalytics = async (req, res) => {
         : 0;
 
     const averageDeliveryFee = Math.round(
-      Number(completedFinancials?._avg?.deliveryFee || 0),
+      Number(completedPaymentsAgg?._avg?.amount || 0),
     );
     const averageRiderFee = Math.round(
-      Number(completedFinancials?._avg?.riderFee || 0),
+      Number(completedRiderFeesAgg?._avg?.riderFee || 0),
     );
     const averageRiderPayout = averageRiderFee;
     const averagePlatformProfit = averageDeliveryFee - averageRiderFee;
 
     // Escrow / In-transit funds
-    const pendingRevenue = Number(pendingFinancials?._sum?.deliveryFee || 0);
-    const pendingRiderPayouts = Number(pendingFinancials?._sum?.riderFee || 0);
+    const pendingRevenue = Number(pendingPaymentsAgg?._sum?.amount || 0);
+    const pendingRiderPayouts = 0; // Can be factored if needed from pending deliveries riderFees
     const pendingSystemProfit = pendingRevenue - pendingRiderPayouts;
 
     // Chart builder
@@ -820,7 +840,7 @@ export const getPaymentAnalytics = async (req, res) => {
     const processedVendors = (rawVendorStats || [])
       .filter((stat) => stat && stat.vendorId !== null)
       .map((stat) => {
-        const totalRev = Number(stat._sum?.deliveryFee || 0);
+        const totalRev = Number(stat._sum?.amount || 0);
         const orderCount = Number(stat._count?.id || 0);
         const aov = orderCount > 0 ? Math.round(totalRev / orderCount) : 0;
 
