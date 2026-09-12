@@ -1,5 +1,5 @@
 import prisma from "../prismaClient.js";
-
+import { DeliveryStatus } from "@prisma/client";
 // Helper to handle both integer IDs (1, 2, 3) and string UUIDs ("cju...")
 const parseId = (id) => (isNaN(Number(id)) ? id : Number(id));
 
