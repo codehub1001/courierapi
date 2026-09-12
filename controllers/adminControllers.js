@@ -607,7 +607,7 @@ export const getPaymentAnalytics = async (req, res) => {
   try {
     const today = new Date();
 
-    // 1. Timeframe Filter Calculation
+    // 1. Timeframe Calculation
     const timeframe = req.query.timeframe || "30days";
     let timeframeStartDate = new Date(today);
     let chartDays = 30;
@@ -630,7 +630,7 @@ export const getPaymentAnalytics = async (req, res) => {
     }
     timeframeStartDate.setUTCHours(0, 0, 0, 0);
 
-    // 2. Leaderboard Period Filter
+    // 2. Leaderboard Period & Sort Options
     const leaderboardPeriod = req.query.leaderboardPeriod || "monthly";
     const sortMetric = req.query.vendorSort || "revenue";
 
@@ -648,10 +648,10 @@ export const getPaymentAnalytics = async (req, res) => {
     chartStartDate.setUTCDate(today.getUTCDate() - chartDays);
     chartStartDate.setUTCHours(0, 0, 0, 0);
 
-    // Valid completed statuses (handles both DELIVERED and COMPLETED DB variations)
+    // Support both status enums
     const completedStatuses = ["DELIVERED", "COMPLETED", "delivered", "completed"];
 
-    // 3. Parallel Queries
+    // 3. Parallel Aggregations
     const [
       completedFinancials,
       completedOrdersCount,
@@ -660,7 +660,7 @@ export const getPaymentAnalytics = async (req, res) => {
       rawVendorStats,
       rawRiderStats,
     ] = await Promise.all([
-      // Aggregate Completed Financials
+      // Financials for completed orders
       prisma.delivery.aggregate({
         _sum: { deliveryFee: true, riderFee: true },
         _avg: { deliveryFee: true, riderFee: true },
@@ -670,7 +670,7 @@ export const getPaymentAnalytics = async (req, res) => {
         },
       }),
 
-      // Count Completed Deliveries
+      // Count of completed deliveries
       prisma.delivery.count({
         where: {
           status: { in: completedStatuses },
@@ -678,7 +678,7 @@ export const getPaymentAnalytics = async (req, res) => {
         },
       }),
 
-      // Active Pending/Escrow Financials
+      // Active Escrow / Funds in Transit
       prisma.delivery.aggregate({
         _sum: { deliveryFee: true, riderFee: true },
         where: {
@@ -686,7 +686,7 @@ export const getPaymentAnalytics = async (req, res) => {
         },
       }),
 
-      // Raw Time-Series Aggregation for Chart
+      // Time-series chart query
       prisma.$queryRaw`
         SELECT 
           TO_CHAR("createdAt" AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS "date",
@@ -701,7 +701,7 @@ export const getPaymentAnalytics = async (req, res) => {
         ORDER BY 1 ASC
       `,
 
-      // Vendor Grouping
+      // Vendor stats
       prisma.delivery.groupBy({
         by: ["vendorId"],
         _sum: { deliveryFee: true },
@@ -712,7 +712,7 @@ export const getPaymentAnalytics = async (req, res) => {
         },
       }),
 
-      // Rider Grouping
+      // Rider stats
       prisma.delivery.groupBy({
         by: ["riderId"],
         _sum: { riderFee: true },
@@ -727,25 +727,25 @@ export const getPaymentAnalytics = async (req, res) => {
       }),
     ]);
 
-    // Financial Metrics Calculations
+    // Financial calculations
     const totalRevenue = Number(completedFinancials?._sum?.deliveryFee || 0);
     const totalRiderPayouts = Number(completedFinancials?._sum?.riderFee || 0);
-    const platformRevenue = totalRevenue - totalRiderPayouts; // Net commission earned by platform
-    const grossProfit = platformRevenue;
-    const systemFeeProfit = platformRevenue;
-    const profitMargin = totalRevenue > 0 ? Number(((platformRevenue / totalRevenue) * 100).toFixed(2)) : 0;
+    const systemFeeProfit = totalRevenue - totalRiderPayouts;
+    const platformRevenue = systemFeeProfit;
+    const grossProfit = systemFeeProfit;
+    const profitMargin = totalRevenue > 0 ? Number(((systemFeeProfit / totalRevenue) * 100).toFixed(2)) : 0;
 
     const averageDeliveryFee = Math.round(Number(completedFinancials?._avg?.deliveryFee || 0));
     const averageRiderFee = Math.round(Number(completedFinancials?._avg?.riderFee || 0));
     const averageRiderPayout = averageRiderFee;
     const averagePlatformProfit = averageDeliveryFee - averageRiderFee;
 
-    // Escrow Calculations
+    // Escrow / In-transit funds
     const pendingRevenue = Number(pendingFinancials?._sum?.deliveryFee || 0);
     const pendingRiderPayouts = Number(pendingFinancials?._sum?.riderFee || 0);
     const pendingSystemProfit = pendingRevenue - pendingRiderPayouts;
 
-    // Timeline Chart Builder
+    // Chart builder
     const dailyChartMap = {};
     for (let i = chartDays - 1; i >= 0; i--) {
       const d = new Date(today);
@@ -783,7 +783,7 @@ export const getPaymentAnalytics = async (req, res) => {
 
     const chartData = Object.values(dailyChartMap).sort((a, b) => a.date.localeCompare(b.date));
 
-    // Process Top Performers
+    // Process Vendor Leaderboard
     const processedVendors = (rawVendorStats || [])
       .filter((stat) => stat && stat.vendorId !== null)
       .map((stat) => {
@@ -800,9 +800,7 @@ export const getPaymentAnalytics = async (req, res) => {
       .sort((a, b) => b.primaryMetricValue - a.primaryMetricValue)
       .slice(0, 5);
 
-    const topRiderStats = (rawRiderStats || [])
-      .filter((stat) => stat && stat.riderId !== null)
-      .slice(0, 5);
+    const topRiderStats = (rawRiderStats || []).filter((stat) => stat && stat.riderId !== null).slice(0, 5);
 
     const vendorIds = processedVendors.map((v) => v.vendorId);
     const riderIds = topRiderStats.map((r) => r.riderId);
@@ -811,13 +809,13 @@ export const getPaymentAnalytics = async (req, res) => {
       vendorIds.length > 0
         ? prisma.vendorProfile.findMany({
             where: { id: { in: vendorIds } },
-            select: { id: true, businessName: true },
+            select: { id: true, businessName: true, email: true },
           })
         : [],
       riderIds.length > 0
         ? prisma.riderProfile.findMany({
             where: { id: { in: riderIds } },
-            select: { id: true, user: { select: { fullName: true } } },
+            select: { id: true, user: { select: { fullName: true, phone: true } } },
           })
         : [],
     ]);
@@ -853,10 +851,10 @@ export const getPaymentAnalytics = async (req, res) => {
       data: {
         overview: {
           totalRevenue,          // Gross Delivery Revenue
-          platformRevenue,       // Net Revenue retained by Platform
-          grossProfit,           // Platform Net Margin
-          systemFeeProfit,       // System Cut
           totalRiderPayouts,     // Disbursed to Riders
+          systemFeeProfit,       // Platform Commission/Profit
+          platformRevenue,       // Alias for System Fee Profit
+          grossProfit,           // Alias for System Fee Profit
           profitMargin,          // Percentage Margin
           averageDeliveryFee,
           averageRiderFee,
