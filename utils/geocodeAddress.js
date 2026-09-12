@@ -1,6 +1,6 @@
 /**
- * Top-tier Geocoding service with dynamic Overpass API fallback,
- * localized aliasing, bounding box constraints, and precision recovery.
+ * Top-tier Geocoding service with localized micro-area fallback mapping,
+ * dynamic Overpass API search, and precision recovery for CourierX.
  * 
  * @param {string} address - The raw address string input from user or vendor.
  * @returns {Promise<{latitude: number, longitude: number, displayName: string, precision: 'EXACT'|'STREET'|'AREA', isApproximate: boolean, addressDetails: object}|null>}
@@ -118,7 +118,7 @@ export const geocodeAddress = async (address) => {
       geocodeResult = await fetchNominatim(queryAddress, false);
     }
 
-    // STAGE 3: Address Sanitization & Structural Cleanup (e.g., "70jemtok" -> "jemtok")
+    // STAGE 3: Address Sanitization & Structural Cleanup
     if (!geocodeResult) {
       console.log("⚠️ Standard search failed. Attempting deep string cleanup for:", queryAddress);
 
@@ -134,13 +134,13 @@ export const geocodeAddress = async (address) => {
       }
     }
 
-    // STAGE 3.5: Dynamic Overpass API Fuzzy Road Search (Catches unmapped local streets automatically)
+    // STAGE 3.5: Dynamic Overpass API Fuzzy Road Search
     if (!geocodeResult) {
       console.log("⚠️ Standard search failed. Attempting dynamic Overpass API street search for:", queryAddress);
       
       try {
         const words = queryAddress.toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/);
-        const streetKeyword = words.find(w => w.length > 3 && !["lagos", "okota", "isolo", "street", "st", "avenue", "ave", "close", "cl", "road", "rd"].includes(w));
+        const streetKeyword = words.find(w => w.length > 3 && !["lagos", "okota", "isolo", "street", "st", "avenue", "ave", "close", "cl", "road", "rd", "ago", "palace"].includes(w));
         
         if (streetKeyword) {
           const overpassQuery = `
@@ -182,34 +182,55 @@ export const geocodeAddress = async (address) => {
       }
     }
 
-    // STAGE 4: Intelligent Neighborhood / Area Fallback
+    // STAGE 4: Micro-Area Intelligent Fallback (Ensures precise pricing anchors even if unmapped)
     if (!geocodeResult) {
       const lower = queryAddress.toLowerCase();
       let fallbackArea = null;
 
-      if (lower.includes("okota")) fallbackArea = "Okota, Isolo, Lagos";
-      else if (lower.includes("isolo")) fallbackArea = "Isolo, Lagos";
-      else if (lower.includes("ikeja")) fallbackArea = "Ikeja, Lagos";
-      else if (lower.includes("lekki")) fallbackArea = "Lekki, Lagos";
-      else if (lower.includes("surulere")) fallbackArea = "Surulere, Lagos";
-      else if (lower.includes("yaba")) fallbackArea = "Yaba, Lagos";
-      else if (lower.includes("ajah")) fallbackArea = "Ajah, Lagos";
-      else if (lower.includes("vi") || lower.includes("victoria island")) fallbackArea = "Victoria Island, Lagos";
-      else if (lower.includes("ikoyi")) fallbackArea = "Ikoyi, Lagos";
-      else if (lower.includes("ikotun")) fallbackArea = "Ikotun, Lagos";
-      else if (lower.includes("egbeda")) fallbackArea = "Egbeda, Lagos";
-      else if (lower.includes("festac")) fallbackArea = "Festac Town, Lagos";
-      else if (lower.includes("ipaja")) fallbackArea, fallbackArea = "Ipaja, Lagos";
-      else if (lower.includes("ogba")) fallbackArea = "Ogba, Lagos";
-      else if (lower.includes("magodo")) fallbackArea = "Magodo, Lagos";
-      else if (lower.includes("oshodi")) fallbackArea = "Oshodi, Lagos";
-      else if (lower.includes("abuja")) fallbackArea = "Abuja, FCT";
-      else if (lower.includes("ibadan")) fallbackArea = "Ibadan, Oyo";
-      else if (lower.includes("port harcourt") || lower.includes("ph")) fallbackArea = "Port Harcourt, Rivers";
-      else fallbackArea = "Lagos, Nigeria";
+      if (lower.includes("ago") || lower.includes("okota")) {
+        fallbackArea = "Ago Palace Way, Okota, Isolo, Lagos"; // Precise anchor for Okota/Ago zone
+      } else if (lower.includes("isolo")) {
+        fallbackArea = "Isolo, Lagos";
+      } else if (lower.includes("ikeja")) {
+        fallbackArea = "Ikeja, Lagos";
+      } else if (lower.includes("lekki")) {
+        fallbackArea = "Lekki Phase 1, Lagos";
+      } else if (lower.includes("surulere")) {
+        fallbackArea = "Surulere, Lagos";
+      } else if (lower.includes("yaba")) {
+        fallbackArea = "Yaba, Lagos";
+      } else if (lower.includes("ajah")) {
+        fallbackArea = "Ajah, Lagos";
+      } else if (lower.includes("vi") || lower.includes("victoria island")) {
+        fallbackArea = "Victoria Island, Lagos";
+      } else if (lower.includes("ikoyi")) {
+        fallbackArea = "Ikoyi, Lagos";
+      } else if (lower.includes("ikotun")) {
+        fallbackArea = "Ikotun, Lagos";
+      } else if (lower.includes("egbeda")) {
+        fallbackArea = "Egbeda, Lagos";
+      } else if (lower.includes("festac")) {
+        fallbackArea = "Festac Town, Lagos";
+      } else if (lower.includes("ipaja")) {
+        fallbackArea = "Ipaja, Lagos";
+      } else if (lower.includes("ogba")) {
+        fallbackArea = "Ogba, Lagos";
+      } else if (lower.includes("magodo")) {
+        fallbackArea = "Magodo, Lagos";
+      } else if (lower.includes("oshodi")) {
+        fallbackArea = "Oshodi, Lagos";
+      } else if (lower.includes("abuja")) {
+        fallbackArea = "Abuja, FCT";
+      } else if (lower.includes("ibadan")) {
+        fallbackArea = "Ibadan, Oyo";
+      } else if (lower.includes("port harcourt") || lower.includes("ph")) {
+        fallbackArea = "Port Harcourt, Rivers";
+      } else {
+        fallbackArea = "Lagos, Nigeria";
+      }
 
       if (fallbackArea) {
-        console.log("⚠️ Street level match failed. Falling back to targeted area level:", fallbackArea);
+        console.log("⚠️ Street level match failed. Falling back to targeted micro-area level:", fallbackArea);
         geocodeResult = await fetchNominatim(fallbackArea, true);
         if (geocodeResult) {
           geocodeResult.precision = "AREA";
