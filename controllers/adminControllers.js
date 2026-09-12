@@ -607,23 +607,26 @@ export const getPaymentAnalytics = async (req, res) => {
   try {
     const today = new Date();
 
+    // 30 days window start date (UTC normalized)
     const thirtyDaysAgo = new Date(today);
-    thirtyDaysAgo.setDate(today.getDate() - 30);
-    thirtyDaysAgo.setHours(0, 0, 0, 0);
+    thirtyDaysAgo.setUTCDate(today.getUTCDate() - 30);
+    thirtyDaysAgo.setUTCHours(0, 0, 0, 0);
 
+    // Leaderboard timeframe filters
     const leaderboardPeriod = req.query.leaderboardPeriod || "monthly";
     const sortMetric = req.query.vendorSort || "revenue";
 
     let leaderboardStartDate = new Date(today);
     if (leaderboardPeriod === "weekly") {
-      leaderboardStartDate.setDate(today.getDate() - 7);
+      leaderboardStartDate.setUTCDate(today.getUTCDate() - 7);
     } else if (leaderboardPeriod === "monthly") {
-      leaderboardStartDate.setDate(today.getDate() - 30);
+      leaderboardStartDate.setUTCDate(today.getUTCDate() - 30);
     } else {
-      leaderboardStartDate = new Date(0);
+      leaderboardStartDate = new Date(0); // All time
     }
-    leaderboardStartDate.setHours(0, 0, 0, 0);
+    leaderboardStartDate.setUTCHours(0, 0, 0, 0);
 
+    // Execute queries in parallel
     const [
       completedFinancials,
       completedOrdersCount,
@@ -632,19 +635,19 @@ export const getPaymentAnalytics = async (req, res) => {
       rawVendorStats,
       rawRiderStats,
     ] = await Promise.all([
-      // Aggregate Completed Financials (Gross Revenue, Rider Cut, Averages)
+      // 1. Completed Financial Metrics (Overall)
       prisma.delivery.aggregate({
         _sum: { deliveryFee: true, riderFee: true },
         _avg: { deliveryFee: true, riderFee: true },
         where: { status: "DELIVERED" },
       }),
 
-      // Total Completed Deliveries Count
+      // 2. Count of Completed Deliveries
       prisma.delivery.count({
         where: { status: "DELIVERED" },
       }),
 
-      // Pending/In-Transit Financials
+      // 3. Pending/In-Transit Escrow Financials
       prisma.delivery.aggregate({
         _sum: { deliveryFee: true, riderFee: true },
         where: {
@@ -652,13 +655,13 @@ export const getPaymentAnalytics = async (req, res) => {
         },
       }),
 
-      // Direct SQL 30-Day Aggregation (Revenue, Rider Payouts, System Profit)
+      // 4. 30-Day Daily Financial Timeline (Raw SQL for PostgreSQL aggregation)
       prisma.$queryRaw`
         SELECT 
           TO_CHAR("createdAt" AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS "date",
-          COALESCE(SUM("deliveryFee"), 0)::float AS "revenue",
-          COALESCE(SUM("riderFee"), 0)::float AS "riderPayouts",
-          COALESCE(SUM("deliveryFee" - "riderFee"), 0)::float AS "profit",
+          COALESCE(SUM(COALESCE("deliveryFee", 0)), 0)::float AS "revenue",
+          COALESCE(SUM(COALESCE("riderFee", 0)), 0)::float AS "riderPayouts",
+          COALESCE(SUM(COALESCE("deliveryFee", 0) - COALESCE("riderFee", 0)), 0)::float AS "profit",
           COUNT("id")::int AS "count"
         FROM "Delivery"
         WHERE "status" = 'DELIVERED' 
@@ -667,7 +670,7 @@ export const getPaymentAnalytics = async (req, res) => {
         ORDER BY 1 ASC
       `,
 
-      // Vendor Aggregations
+      // 5. Vendor Performance Breakdown
       prisma.delivery.groupBy({
         by: ["vendorId"],
         _sum: { deliveryFee: true },
@@ -678,13 +681,14 @@ export const getPaymentAnalytics = async (req, res) => {
         },
       }),
 
-      // Rider Aggregations
+      // 6. Rider Performance Breakdown
       prisma.delivery.groupBy({
         by: ["riderId"],
         _sum: { riderFee: true },
         _count: { id: true },
         where: { 
           status: "DELIVERED",
+          riderId: { not: null },
           createdAt: { gte: leaderboardStartDate }
         },
         orderBy: { _sum: { riderFee: "desc" } },
@@ -692,15 +696,15 @@ export const getPaymentAnalytics = async (req, res) => {
       }),
     ]);
 
-    // Financial calculations: Completed Orders
+    // Financial calculations: Completed Deliveries
     const totalRevenue = Number(completedFinancials?._sum?.deliveryFee || 0);
     const totalRiderPayouts = Number(completedFinancials?._sum?.riderFee || 0);
     
-    // System Fee Profit = Total Delivery Fees - Rider Payouts
+    // Platform Profit = Billed Delivery Fee - Rider Payout Fee
     const systemFeeProfit = totalRevenue - totalRiderPayouts; 
-    const grossProfit = systemFeeProfit; // Maintained for backward compatibility
+    const grossProfit = systemFeeProfit; 
     
-    // System Profit Margin %
+    // Platform Profit Margin (%)
     const profitMargin = totalRevenue > 0 ? Number(((systemFeeProfit / totalRevenue) * 100).toFixed(2)) : 0;
     
     // Averages per delivery
@@ -708,20 +712,21 @@ export const getPaymentAnalytics = async (req, res) => {
     const averageRiderFee = Math.round(Number(completedFinancials?._avg?.riderFee || 0));
     const averageSystemProfit = averageDeliveryFee - averageRiderFee;
 
-    // Financial calculations: Pending Escrow / In-Transit Orders
+    // Financial calculations: Pending / Escrow Orders
     const pendingRevenue = Number(pendingFinancials?._sum?.deliveryFee || 0);
     const pendingRiderPayouts = Number(pendingFinancials?._sum?.riderFee || 0);
     const pendingSystemProfit = pendingRevenue - pendingRiderPayouts;
 
-    // Build 30-day time-series timeline
+    // Generate strict 30-day UTC date sequence for the chart
     const dailyChartMap = {};
-    for (let i = 30; i >= 0; i--) {
+    for (let i = 29; i >= 0; i--) {
       const d = new Date(today);
-      d.setDate(today.getDate() - i);
+      d.setUTCDate(today.getUTCDate() - i);
       const dateString = d.toISOString().split("T")[0];
       dailyChartMap[dateString] = { date: dateString, revenue: 0, riderPayouts: 0, profit: 0, count: 0 };
     }
 
+    // Merge database results into daily chart timeline
     (recentDeliveriesAgg || []).forEach((row) => {
       if (dailyChartMap[row.date]) {
         dailyChartMap[row.date] = {
@@ -766,6 +771,7 @@ export const getPaymentAnalytics = async (req, res) => {
       .filter((stat) => stat && stat.riderId !== null)
       .slice(0, 5);
 
+    // Fetch related profile details for leaderboards
     const vendorIds = processedVendors.map((v) => v.vendorId);
     const riderIds = topRiderStats.map((r) => r.riderId);
 
