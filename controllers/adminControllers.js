@@ -30,7 +30,10 @@ export const toggleRiderVerification = async (req, res) => {
 
     // If newly verified and was PENDING_VERIFICATION, set status to IDLE
     let nextStatus = existingRider.status;
-    if (newVerificationStatus && existingRider.status === "PENDING_VERIFICATION") {
+    if (
+      newVerificationStatus &&
+      existingRider.status === "PENDING_VERIFICATION"
+    ) {
       nextStatus = "IDLE";
     }
 
@@ -77,7 +80,12 @@ export const updateRiderStatus = async (req, res) => {
     const { status, reason } = req.body;
     const targetId = parseId(id);
 
-    const ALLOWED_STATUSES = ["ACTIVE", "IDLE", "PENDING_VERIFICATION", "SUSPENDED"];
+    const ALLOWED_STATUSES = [
+      "ACTIVE",
+      "IDLE",
+      "PENDING_VERIFICATION",
+      "SUSPENDED",
+    ];
 
     if (!status || !ALLOWED_STATUSES.includes(status.toUpperCase())) {
       return res.status(400).json({
@@ -106,7 +114,7 @@ export const updateRiderStatus = async (req, res) => {
       const currentNotes = Array.isArray(existingRider.adminNotes)
         ? existingRider.adminNotes
         : [];
-      
+
       updateData.adminNotes = [
         ...currentNotes,
         {
@@ -223,24 +231,24 @@ export const getAllRiders = async (req, res) => {
       const deliveries = rider.deliveries;
 
       const completedDeliveries = deliveries.filter(
-        (d) => d.status === "DELIVERED"
+        (d) => d.status === "DELIVERED",
       ).length;
 
       const activeDeliveries = deliveries.filter((d) =>
-        ["ASSIGNED", "PICKED_UP", "IN_TRANSIT"].includes(d.status)
+        ["ASSIGNED", "PICKED_UP", "IN_TRANSIT"].includes(d.status),
       ).length;
 
       const cancelledDeliveries = deliveries.filter(
-        (d) => d.status === "CANCELLED"
+        (d) => d.status === "CANCELLED",
       ).length;
 
       const pendingDeliveries = deliveries.filter(
-        (d) => d.status === "PENDING"
+        (d) => d.status === "PENDING",
       ).length;
 
       const totalEarnings = deliveries.reduce(
         (sum, d) => sum + Number(d.riderFee || 0),
-        0
+        0,
       );
 
       const realCount = rider._count.deliveries;
@@ -326,13 +334,20 @@ export const getAllVendors = async (req, res) => {
       ...vendor,
       totalDeliveries: vendor.deliveries.length,
       completedDeliveries: vendor.deliveries.filter(
-        (d) => d.status === "DELIVERED"
+        (d) => d.status === "DELIVERED",
       ).length,
       activeDeliveries: vendor.deliveries.filter((d) =>
-        ["PENDING", "ASSIGNED", "PENDING_PAYMENT", "PAID", "PICKUP", "IN_TRANSIT"].includes(d.status)
+        [
+          "PENDING",
+          "ASSIGNED",
+          "PENDING_PAYMENT",
+          "PAID",
+          "PICKUP",
+          "IN_TRANSIT",
+        ].includes(d.status),
       ).length,
       cancelledDeliveries: vendor.deliveries.filter(
-        (d) => d.status === "CANCELLED"
+        (d) => d.status === "CANCELLED",
       ).length,
     }));
 
@@ -409,7 +424,7 @@ export const getUnpaidAssignedDeliveries = async (req, res) => {
     const deliveries = await prisma.delivery.findMany({
       where: {
         status: "ASSIGNED",
-        
+
         // Ensure it has been in the assigned state for longer than 15 minutes
         assignedAt: {
           lte: fifteenMinutesAgo,
@@ -456,7 +471,8 @@ export const getUnpaidAssignedDeliveries = async (req, res) => {
     return res.status(200).json({
       success: true,
       count: deliveries.length,
-      message: "Fetched assigned deliveries that remain unpaid after 15 minutes.",
+      message:
+        "Fetched assigned deliveries that remain unpaid after 15 minutes.",
       deliveries,
     });
   } catch (error) {
@@ -603,6 +619,8 @@ export const getAdminOverview = async (req, res) => {
     });
   }
 };
+ // Adjust import path if using default @prisma/client
+
 export const getPaymentAnalytics = async (req, res) => {
   try {
     const today = new Date();
@@ -648,8 +666,14 @@ export const getPaymentAnalytics = async (req, res) => {
     chartStartDate.setUTCDate(today.getUTCDate() - chartDays);
     chartStartDate.setUTCHours(0, 0, 0, 0);
 
-    // Support both status enums
-    const completedStatuses = ["DELIVERED", "COMPLETED", "delivered", "completed"];
+    // Schema Enum References
+    const completedStatuses = [DeliveryStatus.DELIVERED];
+    const pendingStatuses = [
+      DeliveryStatus.PENDING,
+      DeliveryStatus.ASSIGNED,
+      DeliveryStatus.PICKED_UP,
+      DeliveryStatus.IN_TRANSIT,
+    ];
 
     // 3. Parallel Aggregations
     const [
@@ -682,7 +706,7 @@ export const getPaymentAnalytics = async (req, res) => {
       prisma.delivery.aggregate({
         _sum: { deliveryFee: true, riderFee: true },
         where: {
-          status: { in: ["PENDING", "ASSIGNED", "PICKED_UP", "IN_TRANSIT", "pending", "assigned", "in_transit"] },
+          status: { in: pendingStatuses },
         },
       }),
 
@@ -695,7 +719,7 @@ export const getPaymentAnalytics = async (req, res) => {
           COALESCE(SUM(COALESCE("deliveryFee", 0) - COALESCE("riderFee", 0)), 0)::float AS "profit",
           COUNT("id")::int AS "orders"
         FROM "Delivery"
-        WHERE "status" IN ('DELIVERED', 'COMPLETED', 'delivered', 'completed')
+        WHERE "status"::text = 'DELIVERED'
           AND "createdAt" >= ${chartStartDate}
         GROUP BY 1
         ORDER BY 1 ASC
@@ -733,10 +757,17 @@ export const getPaymentAnalytics = async (req, res) => {
     const systemFeeProfit = totalRevenue - totalRiderPayouts;
     const platformRevenue = systemFeeProfit;
     const grossProfit = systemFeeProfit;
-    const profitMargin = totalRevenue > 0 ? Number(((systemFeeProfit / totalRevenue) * 100).toFixed(2)) : 0;
+    const profitMargin =
+      totalRevenue > 0
+        ? Number(((systemFeeProfit / totalRevenue) * 100).toFixed(2))
+        : 0;
 
-    const averageDeliveryFee = Math.round(Number(completedFinancials?._avg?.deliveryFee || 0));
-    const averageRiderFee = Math.round(Number(completedFinancials?._avg?.riderFee || 0));
+    const averageDeliveryFee = Math.round(
+      Number(completedFinancials?._avg?.deliveryFee || 0),
+    );
+    const averageRiderFee = Math.round(
+      Number(completedFinancials?._avg?.riderFee || 0),
+    );
     const averageRiderPayout = averageRiderFee;
     const averagePlatformProfit = averageDeliveryFee - averageRiderFee;
 
@@ -781,7 +812,9 @@ export const getPaymentAnalytics = async (req, res) => {
       }
     });
 
-    const chartData = Object.values(dailyChartMap).sort((a, b) => a.date.localeCompare(b.date));
+    const chartData = Object.values(dailyChartMap).sort((a, b) =>
+      a.date.localeCompare(b.date),
+    );
 
     // Process Vendor Leaderboard
     const processedVendors = (rawVendorStats || [])
@@ -795,12 +828,19 @@ export const getPaymentAnalytics = async (req, res) => {
         if (sortMetric === "volume") primaryMetricValue = orderCount;
         if (sortMetric === "aov") primaryMetricValue = aov;
 
-        return { vendorId: stat.vendorId, totalRevenue: totalRev, orderCount, primaryMetricValue };
+        return {
+          vendorId: stat.vendorId,
+          totalRevenue: totalRev,
+          orderCount,
+          primaryMetricValue,
+        };
       })
       .sort((a, b) => b.primaryMetricValue - a.primaryMetricValue)
       .slice(0, 5);
 
-    const topRiderStats = (rawRiderStats || []).filter((stat) => stat && stat.riderId !== null).slice(0, 5);
+    const topRiderStats = (rawRiderStats || [])
+      .filter((stat) => stat && stat.riderId !== null)
+      .slice(0, 5);
 
     const vendorIds = processedVendors.map((v) => v.vendorId);
     const riderIds = topRiderStats.map((r) => r.riderId);
@@ -809,13 +849,16 @@ export const getPaymentAnalytics = async (req, res) => {
       vendorIds.length > 0
         ? prisma.vendorProfile.findMany({
             where: { id: { in: vendorIds } },
-            select: { id: true, businessName: true, email: true },
+            select: { id: true, businessName: true },
           })
         : [],
       riderIds.length > 0
         ? prisma.riderProfile.findMany({
             where: { id: { in: riderIds } },
-            select: { id: true, user: { select: { fullName: true, phone: true } } },
+            select: {
+              id: true,
+              user: { select: { fullName: true, phone: true } },
+            },
           })
         : [],
     ]);
@@ -835,7 +878,10 @@ export const getPaymentAnalytics = async (req, res) => {
       const rider = ridersDetails.find((r) => r.id === stat.riderId);
       const totalEarnings = Number(stat._sum?.riderFee || 0);
       const deliveriesCompleted = Number(stat._count?.id || 0);
-      const avgEarningPerDelivery = deliveriesCompleted > 0 ? Math.round(totalEarnings / deliveriesCompleted) : 0;
+      const avgEarningPerDelivery =
+        deliveriesCompleted > 0
+          ? Math.round(totalEarnings / deliveriesCompleted)
+          : 0;
 
       return {
         riderId: stat.riderId,
@@ -850,12 +896,12 @@ export const getPaymentAnalytics = async (req, res) => {
       success: true,
       data: {
         overview: {
-          totalRevenue,          // Gross Delivery Revenue
-          totalRiderPayouts,     // Disbursed to Riders
-          systemFeeProfit,       // Platform Commission/Profit
-          platformRevenue,       // Alias for System Fee Profit
-          grossProfit,           // Alias for System Fee Profit
-          profitMargin,          // Percentage Margin
+          totalRevenue,
+          totalRiderPayouts,
+          systemFeeProfit,
+          platformRevenue,
+          grossProfit,
+          profitMargin,
           averageDeliveryFee,
           averageRiderFee,
           averageRiderPayout,
@@ -930,8 +976,12 @@ export const adminGetAllVendorsDeliveryHistory = async (req, res) => {
       },
     });
 
-    const completedDeliveries = deliveries.filter((d) => d.status === "DELIVERED");
-    const cancelledDeliveries = deliveries.filter((d) => d.status === "CANCELLED");
+    const completedDeliveries = deliveries.filter(
+      (d) => d.status === "DELIVERED",
+    );
+    const cancelledDeliveries = deliveries.filter(
+      (d) => d.status === "CANCELLED",
+    );
 
     return res.status(200).json({
       success: true,
@@ -950,7 +1000,8 @@ export const adminGetAllVendorsDeliveryHistory = async (req, res) => {
     console.error("Error fetching all vendors delivery history:", error);
     return res.status(500).json({
       success: false,
-      message: "Internal server error while fetching all vendors' delivery history.",
+      message:
+        "Internal server error while fetching all vendors' delivery history.",
       error: error.message,
     });
   }
@@ -997,7 +1048,7 @@ export const adminGetAllVendorsPaymentHistory = async (req, res) => {
     // Calculate total platform revenue generated through vendor deliveries
     const totalRevenue = paymentRecords.reduce(
       (sum, record) => sum + Number(record.deliveryFee || 0),
-      0
+      0,
     );
 
     return res.status(200).json({
@@ -1012,7 +1063,8 @@ export const adminGetAllVendorsPaymentHistory = async (req, res) => {
     console.error("Error fetching all vendors payment history:", error);
     return res.status(500).json({
       success: false,
-      message: "Internal server error while fetching all vendors' payment history.",
+      message:
+        "Internal server error while fetching all vendors' payment history.",
       error: error.message,
     });
   }
@@ -1066,7 +1118,7 @@ export const adminGetAllRidersPayoutHistory = async (req, res) => {
     // Calculate total platform-wide rider payouts generated
     const totalRiderPayouts = payoutRecords.reduce(
       (sum, record) => sum + Number(record.riderFee || 0),
-      0
+      0,
     );
 
     return res.status(200).json({
@@ -1081,7 +1133,8 @@ export const adminGetAllRidersPayoutHistory = async (req, res) => {
     console.error("Error fetching all riders payout history:", error);
     return res.status(500).json({
       success: false,
-      message: "Internal server error while fetching all riders' payout history.",
+      message:
+        "Internal server error while fetching all riders' payout history.",
       error: error.message,
     });
   }
