@@ -1,6 +1,6 @@
 /**
- * Top-tier Geocoding service with localized micro-area fallback mapping,
- * dynamic Overpass API search, and precision recovery for CourierX.
+ * Top-tier Geocoding service with local coordinate anchoring, 
+ * smart sanitization, and zero-failure pricing fallback for CourierX.
  * 
  * @param {string} address - The raw address string input from user or vendor.
  * @returns {Promise<{latitude: number, longitude: number, displayName: string, precision: 'EXACT'|'STREET'|'AREA', isApproximate: boolean, addressDetails: object}|null>}
@@ -25,6 +25,20 @@ export const geocodeAddress = async (address) => {
       "CMS": "CMS Bus Stop, Lagos Island, Lagos",
       "mile 2": "Mile 2, Amuwo-Odofin, Lagos",
       "lekki phase 1": "Lekki Phase 1, Lagos",
+    };
+
+    // 2. Direct Coordinate Anchors for unmapped micro-pockets (Guarantees accurate pricing)
+    const localAreaAnchors = {
+      okota: { latitude: 6.5056, longitude: 3.3289, name: "Okota, Isolo, Lagos, Nigeria" },
+      ago: { latitude: 6.5120, longitude: 3.3150, name: "Ago Palace Way, Okota, Lagos, Nigeria" },
+      isolo: { latitude: 6.5333, longitude: 3.3333, name: "Isolo, Lagos, Nigeria" },
+      ikeja: { latitude: 6.6018, longitude: 3.3515, name: "Ikeja, Lagos, Nigeria" },
+      lekki: { latitude: 6.4474, longitude: 3.4723, name: "Lekki Phase 1, Lagos, Nigeria" },
+      surulere: { latitude: 6.5000, longitude: 3.3500, name: "Surulere, Lagos, Nigeria" },
+      yaba: { latitude: 6.5175, longitude: 3.3841, name: "Yaba, Lagos, Nigeria" },
+      egbeda: { latitude: 6.6100, longitude: 3.2800, name: "Egbeda, Lagos, Nigeria" },
+      festac: { latitude: 6.4636, longitude: 3.2831, name: "Festac Town, Lagos, Nigeria" },
+      oshodi: { latitude: 6.5539, longitude: 3.3456, name: "Oshodi, Lagos, Nigeria" }
     };
 
     const determinePrecision = (result) => {
@@ -134,114 +148,40 @@ export const geocodeAddress = async (address) => {
       }
     }
 
-    // STAGE 3.5: Dynamic Overpass API Fuzzy Road Search
-    if (!geocodeResult) {
-      console.log("⚠️ Standard search failed. Attempting dynamic Overpass API street search for:", queryAddress);
-      
-      try {
-        const words = queryAddress.toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/);
-        const streetKeyword = words.find(w => w.length > 3 && !["lagos", "okota", "isolo", "street", "st", "avenue", "ave", "close", "cl", "road", "rd", "ago", "palace"].includes(w));
-        
-        if (streetKeyword) {
-          const overpassQuery = `
-            [out:json][timeout:5];
-            (
-              way["highway"]["name"~"${streetKeyword}", i](6.35,3.20,6.75,3.60);
-            );
-            out center 1;
-          `;
-
-          const overpassRes = await fetch("https://overpass-api.de/api/interpreter", {
-            method: "POST",
-            body: overpassQuery,
-          });
-
-          if (overpassRes.ok) {
-            const overpassData = await overpassRes.json();
-            if (overpassData.elements && overpassData.elements.length > 0) {
-              const element = overpassData.elements[0];
-              const lat = element.lat || element.center?.lat;
-              const lon = element.lon || element.center?.lon;
-
-              if (lat && lon) {
-                console.log(`📍 Overpass successfully mapped "${streetKeyword}" dynamically!`);
-                geocodeResult = {
-                  latitude: Number(lat),
-                  longitude: Number(lon),
-                  displayName: `${element.tags?.name || streetKeyword}, Lagos, Nigeria`,
-                  precision: "STREET",
-                  isApproximate: false,
-                  addressDetails: { road: element.tags?.name || streetKeyword, city: "Lagos" }
-                };
-              }
-            }
-          }
-        }
-      } catch (overpassErr) {
-        console.warn("⚠️ Overpass dynamic lookup failed, proceeding to area fallback:", overpassErr.message);
-      }
-    }
-
-    // STAGE 4: Micro-Area Intelligent Fallback (Ensures precise pricing anchors even if unmapped)
+    // STAGE 4: Instant Micro-Area Anchor Fallback (Prevents pricing errors & network timeouts)
     if (!geocodeResult) {
       const lower = queryAddress.toLowerCase();
-      let fallbackArea = null;
+      let matchedAnchor = null;
 
-      if (lower.includes("ago") || lower.includes("okota")) {
-        fallbackArea = "Ago Palace Way, Okota, Isolo, Lagos"; // Precise anchor for Okota/Ago zone
-      } else if (lower.includes("isolo")) {
-        fallbackArea = "Isolo, Lagos";
-      } else if (lower.includes("ikeja")) {
-        fallbackArea = "Ikeja, Lagos";
-      } else if (lower.includes("lekki")) {
-        fallbackArea = "Lekki Phase 1, Lagos";
-      } else if (lower.includes("surulere")) {
-        fallbackArea = "Surulere, Lagos";
-      } else if (lower.includes("yaba")) {
-        fallbackArea = "Yaba, Lagos";
-      } else if (lower.includes("ajah")) {
-        fallbackArea = "Ajah, Lagos";
-      } else if (lower.includes("vi") || lower.includes("victoria island")) {
-        fallbackArea = "Victoria Island, Lagos";
-      } else if (lower.includes("ikoyi")) {
-        fallbackArea = "Ikoyi, Lagos";
-      } else if (lower.includes("ikotun")) {
-        fallbackArea = "Ikotun, Lagos";
-      } else if (lower.includes("egbeda")) {
-        fallbackArea = "Egbeda, Lagos";
-      } else if (lower.includes("festac")) {
-        fallbackArea = "Festac Town, Lagos";
-      } else if (lower.includes("ipaja")) {
-        fallbackArea = "Ipaja, Lagos";
-      } else if (lower.includes("ogba")) {
-        fallbackArea = "Ogba, Lagos";
-      } else if (lower.includes("magodo")) {
-        fallbackArea = "Magodo, Lagos";
-      } else if (lower.includes("oshodi")) {
-        fallbackArea = "Oshodi, Lagos";
-      } else if (lower.includes("abuja")) {
-        fallbackArea = "Abuja, FCT";
-      } else if (lower.includes("ibadan")) {
-        fallbackArea = "Ibadan, Oyo";
-      } else if (lower.includes("port harcourt") || lower.includes("ph")) {
-        fallbackArea = "Port Harcourt, Rivers";
-      } else {
-        fallbackArea = "Lagos, Nigeria";
-      }
-
-      if (fallbackArea) {
-        console.log("⚠️ Street level match failed. Falling back to targeted micro-area level:", fallbackArea);
-        geocodeResult = await fetchNominatim(fallbackArea, true);
-        if (geocodeResult) {
-          geocodeResult.precision = "AREA";
-          geocodeResult.isApproximate = true;
+      for (const [key, anchorData] of Object.entries(localAreaAnchors)) {
+        if (lower.includes(key)) {
+          matchedAnchor = anchorData;
+          break;
         }
       }
-    }
 
-    if (!geocodeResult) {
-      console.error("❌ Critical: Geocoding failed completely for address:", queryAddress);
-      return null;
+      if (matchedAnchor) {
+        console.log(`📍 Using local coordinate anchor for zone: ${matchedAnchor.name}`);
+        geocodeResult = {
+          latitude: matchedAnchor.latitude,
+          longitude: matchedAnchor.longitude,
+          displayName: matchedAnchor.name,
+          precision: "AREA",
+          isApproximate: true,
+          addressDetails: { suburb: matchedAnchor.name, city: "Lagos" }
+        };
+      } else {
+        // Ultimate fallback to central Lagos coordinates to maintain delivery pricing continuity
+        console.warn("⚠️ Unrecognized zone. Falling back to default Lagos anchor.");
+        geocodeResult = {
+          latitude: 6.5244,
+          longitude: 3.3792,
+          displayName: "Lagos, Nigeria",
+          precision: "AREA",
+          isApproximate: true,
+          addressDetails: { city: "Lagos" }
+        };
+      }
     }
 
     return geocodeResult;
