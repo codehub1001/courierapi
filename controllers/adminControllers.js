@@ -607,7 +607,6 @@ export const getPaymentAnalytics = async (req, res) => {
   try {
     const today = new Date();
 
-    // Standardized 30-day rolling window
     const thirtyDaysAgo = new Date(today);
     thirtyDaysAgo.setDate(today.getDate() - 30);
     thirtyDaysAgo.setHours(0, 0, 0, 0);
@@ -615,14 +614,13 @@ export const getPaymentAnalytics = async (req, res) => {
     const leaderboardPeriod = req.query.leaderboardPeriod || "monthly";
     const sortMetric = req.query.vendorSort || "revenue";
 
-    // Leaderboard Start Date calculation (using rolling days to avoid JS month-edge bugs)
     let leaderboardStartDate = new Date(today);
     if (leaderboardPeriod === "weekly") {
       leaderboardStartDate.setDate(today.getDate() - 7);
     } else if (leaderboardPeriod === "monthly") {
       leaderboardStartDate.setDate(today.getDate() - 30);
     } else {
-      leaderboardStartDate = new Date(0); // All-time
+      leaderboardStartDate = new Date(0);
     }
     leaderboardStartDate.setHours(0, 0, 0, 0);
 
@@ -634,10 +632,10 @@ export const getPaymentAnalytics = async (req, res) => {
       rawVendorStats,
       rawRiderStats,
     ] = await Promise.all([
-      // Completed Deliveries Overview
+      // Aggregate Completed Financials (Gross Revenue, Rider Cut, Averages)
       prisma.delivery.aggregate({
         _sum: { deliveryFee: true, riderFee: true },
-        _avg: { deliveryFee: true },
+        _avg: { deliveryFee: true, riderFee: true },
         where: { status: "DELIVERED" },
       }),
 
@@ -646,7 +644,7 @@ export const getPaymentAnalytics = async (req, res) => {
         where: { status: "DELIVERED" },
       }),
 
-      // Pending Escrow / Deliveries in Transit
+      // Pending/In-Transit Financials
       prisma.delivery.aggregate({
         _sum: { deliveryFee: true, riderFee: true },
         where: {
@@ -654,7 +652,7 @@ export const getPaymentAnalytics = async (req, res) => {
         },
       }),
 
-      // Direct SQL grouping to avoid loading thousands of delivery objects into Node memory
+      // Direct SQL 30-Day Aggregation (Revenue, Rider Payouts, System Profit)
       prisma.$queryRaw`
         SELECT 
           TO_CHAR("createdAt" AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS "date",
@@ -669,43 +667,53 @@ export const getPaymentAnalytics = async (req, res) => {
         ORDER BY 1 ASC
       `,
 
-      // Vendor Groupings (Filtered at DB level for valid vendorId)
+      // Vendor Aggregations
       prisma.delivery.groupBy({
         by: ["vendorId"],
         _sum: { deliveryFee: true },
         _count: { id: true },
         where: { 
           status: "DELIVERED",
-          vendorId: { not: null },
           createdAt: { gte: leaderboardStartDate }
         },
       }),
 
-      // Rider Groupings (Filtered at DB level for valid riderId and limited to top 5)
+      // Rider Aggregations
       prisma.delivery.groupBy({
         by: ["riderId"],
         _sum: { riderFee: true },
         _count: { id: true },
         where: { 
           status: "DELIVERED",
-          riderId: { not: null },
           createdAt: { gte: leaderboardStartDate }
         },
         orderBy: { _sum: { riderFee: "desc" } },
-        take: 5,
+        take: 10,
       }),
     ]);
 
-    // Financial calculations
+    // Financial calculations: Completed Orders
     const totalRevenue = Number(completedFinancials?._sum?.deliveryFee || 0);
     const totalRiderPayouts = Number(completedFinancials?._sum?.riderFee || 0);
-    const grossProfit = totalRevenue - totalRiderPayouts;
-    const profitMargin = totalRevenue > 0 ? Number(((grossProfit / totalRevenue) * 100).toFixed(2)) : 0;
     
+    // System Fee Profit = Total Delivery Fees - Rider Payouts
+    const systemFeeProfit = totalRevenue - totalRiderPayouts; 
+    const grossProfit = systemFeeProfit; // Maintained for backward compatibility
+    
+    // System Profit Margin %
+    const profitMargin = totalRevenue > 0 ? Number(((systemFeeProfit / totalRevenue) * 100).toFixed(2)) : 0;
+    
+    // Averages per delivery
+    const averageDeliveryFee = Math.round(Number(completedFinancials?._avg?.deliveryFee || 0));
+    const averageRiderFee = Math.round(Number(completedFinancials?._avg?.riderFee || 0));
+    const averageSystemProfit = averageDeliveryFee - averageRiderFee;
+
+    // Financial calculations: Pending Escrow / In-Transit Orders
     const pendingRevenue = Number(pendingFinancials?._sum?.deliveryFee || 0);
     const pendingRiderPayouts = Number(pendingFinancials?._sum?.riderFee || 0);
+    const pendingSystemProfit = pendingRevenue - pendingRiderPayouts;
 
-    // Build complete 30-day time-series shell
+    // Build 30-day time-series timeline
     const dailyChartMap = {};
     for (let i = 30; i >= 0; i--) {
       const d = new Date(today);
@@ -714,7 +722,6 @@ export const getPaymentAnalytics = async (req, res) => {
       dailyChartMap[dateString] = { date: dateString, revenue: 0, riderPayouts: 0, profit: 0, count: 0 };
     }
 
-    // Populate actual DB aggregated values into chart map
     (recentDeliveriesAgg || []).forEach((row) => {
       if (dailyChartMap[row.date]) {
         dailyChartMap[row.date] = {
@@ -729,8 +736,9 @@ export const getPaymentAnalytics = async (req, res) => {
 
     const chartData = Object.values(dailyChartMap).sort((a, b) => a.date.localeCompare(b.date));
 
-    // Dynamic Vendor metric sorting and top-5 slice
-    const processedVendors = rawVendorStats
+    // Process Top Vendors
+    const processedVendors = (rawVendorStats || [])
+      .filter((stat) => stat && stat.vendorId !== null)
       .map((stat) => {
         const totalRev = Number(stat._sum?.deliveryFee || 0);
         const orderCount = Number(stat._count?.id || 0);
@@ -753,9 +761,13 @@ export const getPaymentAnalytics = async (req, res) => {
       .sort((a, b) => b.primaryMetricValue - a.primaryMetricValue)
       .slice(0, 5);
 
-    // Dynamic Profile hydration queries
+    // Process Top Riders
+    const topRiderStats = (rawRiderStats || [])
+      .filter((stat) => stat && stat.riderId !== null)
+      .slice(0, 5);
+
     const vendorIds = processedVendors.map((v) => v.vendorId);
-    const riderIds = rawRiderStats.map((r) => r.riderId);
+    const riderIds = topRiderStats.map((r) => r.riderId);
 
     const [vendorsDetails, ridersDetails] = await Promise.all([
       vendorIds.length > 0
@@ -782,7 +794,7 @@ export const getPaymentAnalytics = async (req, res) => {
       };
     });
 
-    const topRiders = rawRiderStats.map((stat) => {
+    const topRiders = topRiderStats.map((stat) => {
       const rider = ridersDetails.find((r) => r.id === stat.riderId);
       return {
         riderId: stat.riderId,
@@ -799,12 +811,16 @@ export const getPaymentAnalytics = async (req, res) => {
           totalRevenue,
           totalRiderPayouts,
           grossProfit,
+          systemFeeProfit,
           profitMargin,
-          averageDeliveryFee: Math.round(Number(completedFinancials?._avg?.deliveryFee || 0)),
+          averageDeliveryFee,
+          averageRiderFee,
+          averageSystemProfit,
         },
         pending: {
           totalPendingRevenue: pendingRevenue,
           totalPendingRiderPayouts: pendingRiderPayouts,
+          totalPendingSystemProfit: pendingSystemProfit,
         },
         charts: {
           last30Days: chartData,
