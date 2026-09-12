@@ -1,5 +1,5 @@
 import prisma from "../prismaClient.js";
-import { DeliveryStatus } from "@prisma/client";
+
 // Helper to handle both integer IDs (1, 2, 3) and string UUIDs ("cju...")
 const parseId = (id) => (isNaN(Number(id)) ? id : Number(id));
 
@@ -666,13 +666,13 @@ export const getPaymentAnalytics = async (req, res) => {
     chartStartDate.setUTCDate(today.getUTCDate() - chartDays);
     chartStartDate.setUTCHours(0, 0, 0, 0);
 
-    // Schema Enum References
-    const completedStatuses = [DeliveryStatus.DELIVERED];
+    // Schema Enum References (Using plain string literals to bypass ESM export mismatch with @prisma/client)
+    const completedStatuses = ["DELIVERED"];
     const pendingStatuses = [
-      DeliveryStatus.PENDING,
-      DeliveryStatus.ASSIGNED,
-      DeliveryStatus.PICKED_UP,
-      DeliveryStatus.IN_TRANSIT,
+      "PENDING",
+      "ASSIGNED",
+      "PICKED_UP",
+      "IN_TRANSIT",
     ];
 
     // 3. Parallel Aggregations
