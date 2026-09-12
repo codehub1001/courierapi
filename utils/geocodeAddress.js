@@ -1,6 +1,6 @@
 /**
- * Top-tier Geocoding service with localized aliasing, bounding box constraints,
- * and multi-stage fallback precision recovery.
+ * Top-tier Geocoding service with dynamic Overpass API fallback,
+ * localized aliasing, bounding box constraints, and precision recovery.
  * 
  * @param {string} address - The raw address string input from user or vendor.
  * @returns {Promise<{latitude: number, longitude: number, displayName: string, precision: 'EXACT'|'STREET'|'AREA', isApproximate: boolean, addressDetails: object}|null>}
@@ -45,7 +45,6 @@ export const geocodeAddress = async (address) => {
     const fetchNominatim = async (queryString, useBoundingBox = true) => {
       let formattedQuery = queryString;
       
-      // Check if it matches any local landmark alias first
       const lowerQuery = queryString.toLowerCase();
       for (const [key, val] of Object.entries(landmarkAliases)) {
         if (lowerQuery.includes(key)) {
@@ -68,9 +67,7 @@ export const geocodeAddress = async (address) => {
         addressdetails: "1",
       });
 
-      // Restrict search bounds to southwest Nigeria / Lagos region to eliminate false matches elsewhere
       if (useBoundingBox) {
-        // Bounding box format: minlon, minlat, maxlon, maxlat (covers Lagos and immediate environs)
         params.append("viewbox", "2.68,6.35,4.25,6.85");
         params.append("bounded", "1");
       }
@@ -137,6 +134,54 @@ export const geocodeAddress = async (address) => {
       }
     }
 
+    // STAGE 3.5: Dynamic Overpass API Fuzzy Road Search (Catches unmapped local streets automatically)
+    if (!geocodeResult) {
+      console.log("⚠️ Standard search failed. Attempting dynamic Overpass API street search for:", queryAddress);
+      
+      try {
+        const words = queryAddress.toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/);
+        const streetKeyword = words.find(w => w.length > 3 && !["lagos", "okota", "isolo", "street", "st", "avenue", "ave", "close", "cl", "road", "rd"].includes(w));
+        
+        if (streetKeyword) {
+          const overpassQuery = `
+            [out:json][timeout:5];
+            (
+              way["highway"]["name"~"${streetKeyword}", i](6.35,3.20,6.75,3.60);
+            );
+            out center 1;
+          `;
+
+          const overpassRes = await fetch("https://overpass-api.de/api/interpreter", {
+            method: "POST",
+            body: overpassQuery,
+          });
+
+          if (overpassRes.ok) {
+            const overpassData = await overpassRes.json();
+            if (overpassData.elements && overpassData.elements.length > 0) {
+              const element = overpassData.elements[0];
+              const lat = element.lat || element.center?.lat;
+              const lon = element.lon || element.center?.lon;
+
+              if (lat && lon) {
+                console.log(`📍 Overpass successfully mapped "${streetKeyword}" dynamically!`);
+                geocodeResult = {
+                  latitude: Number(lat),
+                  longitude: Number(lon),
+                  displayName: `${element.tags?.name || streetKeyword}, Lagos, Nigeria`,
+                  precision: "STREET",
+                  isApproximate: false,
+                  addressDetails: { road: element.tags?.name || streetKeyword, city: "Lagos" }
+                };
+              }
+            }
+          }
+        }
+      } catch (overpassErr) {
+        console.warn("⚠️ Overpass dynamic lookup failed, proceeding to area fallback:", overpassErr.message);
+      }
+    }
+
     // STAGE 4: Intelligent Neighborhood / Area Fallback
     if (!geocodeResult) {
       const lower = queryAddress.toLowerCase();
@@ -154,14 +199,14 @@ export const geocodeAddress = async (address) => {
       else if (lower.includes("ikotun")) fallbackArea = "Ikotun, Lagos";
       else if (lower.includes("egbeda")) fallbackArea = "Egbeda, Lagos";
       else if (lower.includes("festac")) fallbackArea = "Festac Town, Lagos";
-      else if (lower.includes("ipaja")) fallbackArea = "Ipaja, Lagos";
+      else if (lower.includes("ipaja")) fallbackArea, fallbackArea = "Ipaja, Lagos";
       else if (lower.includes("ogba")) fallbackArea = "Ogba, Lagos";
       else if (lower.includes("magodo")) fallbackArea = "Magodo, Lagos";
       else if (lower.includes("oshodi")) fallbackArea = "Oshodi, Lagos";
       else if (lower.includes("abuja")) fallbackArea = "Abuja, FCT";
       else if (lower.includes("ibadan")) fallbackArea = "Ibadan, Oyo";
       else if (lower.includes("port harcourt") || lower.includes("ph")) fallbackArea = "Port Harcourt, Rivers";
-      else fallbackArea = "Lagos, Nigeria"; // Ultimate default fallback for logistics continuity
+      else fallbackArea = "Lagos, Nigeria";
 
       if (fallbackArea) {
         console.log("⚠️ Street level match failed. Falling back to targeted area level:", fallbackArea);
