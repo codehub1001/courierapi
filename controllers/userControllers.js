@@ -12,6 +12,7 @@ export const getResend = () => {
   return new Resend(apiKey);
 };
 
+
 export const registerUser = async (req, res) => {
   try {
     const {
@@ -140,6 +141,83 @@ export const registerUser = async (req, res) => {
         },
       });
     }
+
+    // --- ONBOARDING EMAIL DISPATCH ---
+    try {
+      const resend = getResend();
+      let emailSubject = "";
+      let emailHtml = "";
+
+      const baseStyles = `font-family: system-ui, -apple-system, sans-serif; max-width: 500px; margin: 0 auto; padding: 32px; border: 1px solid #e2e8f0; border-radius: 24px; background-color: #ffffff;`;
+
+      if (role === "RIDER") {
+        emailSubject = "Welcome to CourierX! Your Rider Onboarding Steps";
+        emailHtml = `
+          <div style="${baseStyles}">
+            <div style="margin-bottom: 24px;">
+              <span style="background-color: #fff7ed; color: #f97316; padding: 8px 12px; border-radius: 9999px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;">Rider Onboarding</span>
+            </div>
+            <h2 style="color: #0f172a; font-size: 24px; font-weight: 800; margin-bottom: 8px;">Welcome aboard, ${user.fullName}!</h2>
+            <p style="color: #475569; font-size: 15px; line-height: 1.5; margin-bottom: 24px;">
+              You're all set to start accepting deliveries in your registered area. Here is how CourierX works:
+            </p>
+            
+            <h3 style="color: #0f172a; font-size: 16px; margin-bottom: 4px;">📍 Interactive Live Tracking</h3>
+            <p style="color: #64748b; font-size: 14px; margin-top: 0; margin-bottom: 16px;">Always ensure your device location services are active. Our real-time mapping routes you efficiently and keeps vendors updated.</p>
+
+            <h3 style="color: #0f172a; font-size: 16px; margin-bottom: 4px;">🔔 Dual-Stage Geofencing Alerts</h3>
+            <p style="color: #64748b; font-size: 14px; margin-top: 0; margin-bottom: 16px;">You don't need to manually update your status constantly. Our dual-stage geofencing system automatically triggers alerts to the vendor and customer as you approach the pickup and drop-off coordinates.</p>
+
+            <h3 style="color: #0f172a; font-size: 16px; margin-bottom: 4px;">💳 Dynamic Fares & Paystack Payouts</h3>
+            <p style="color: #64748b; font-size: 14px; margin-top: 0; margin-bottom: 24px;">Your earnings are dynamically calculated in Naira (NGN) based on exact distance and duration. All payouts are securely processed directly to your account via Paystack.</p>
+
+            <div style="text-align: left; margin-bottom: 24px;">
+              <a href="${process.env.FRONTEND_URL || "https://courierx.vercel.app/"}/login" style="background-color: #f97316; color: #000000; padding: 14px 28px; text-decoration: none; border-radius: 12px; font-size: 16px; font-weight: 700; display: inline-block; box-shadow: 0 4px 6px -1px rgba(249, 115, 22, 0.2);">
+                Log In to Your Dashboard
+              </a>
+            </div>
+          </div>
+        `;
+      } else if (role === "VENDOR") {
+        emailSubject = "Welcome to CourierX! Start dispatching today";
+        emailHtml = `
+          <div style="${baseStyles}">
+            <div style="margin-bottom: 24px;">
+              <span style="background-color: #f0fdf4; color: #16a34a; padding: 8px 12px; border-radius: 9999px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;">Vendor Account Active</span>
+            </div>
+            <h2 style="color: #0f172a; font-size: 24px; font-weight: 800; margin-bottom: 8px;">Welcome, ${businessName}!</h2>
+            <p style="color: #475569; font-size: 15px; line-height: 1.5; margin-bottom: 24px;">
+              Your business is officially set up to request fast, reliable deliveries on CourierX.
+            </p>
+            
+            <h3 style="color: #0f172a; font-size: 16px; margin-bottom: 4px;">🗺️ Live Map Tracking</h3>
+            <p style="color: #64748b; font-size: 14px; margin-top: 0; margin-bottom: 16px;">Watch your assigned riders in real-time as they navigate directly to your customers on our interactive tracking map.</p>
+
+            <h3 style="color: #0f172a; font-size: 16px; margin-bottom: 4px;">📱 Automated Customer Notifications</h3>
+            <p style="color: #64748b; font-size: 14px; margin-top: 0; margin-bottom: 16px;">Your customers will receive automated WhatsApp updates keeping them fully informed as their order is picked up and dropped off.</p>
+
+            <div style="text-align: left; margin-bottom: 24px;">
+              <a href="${process.env.FRONTEND_URL || "https://courierx.vercel.app/"}/login" style="background-color: #0f172a; color: #ffffff; padding: 14px 28px; text-decoration: none; border-radius: 12px; font-size: 16px; font-weight: 700; display: inline-block;">
+                Access Vendor Dashboard
+              </a>
+            </div>
+          </div>
+        `;
+      }
+
+      await resend.emails.send({
+        from: "CourierX Onboarding <onboarding@resend.dev>", // Update domain when going live
+        to: user.email,
+        subject: emailSubject,
+        html: emailHtml,
+      });
+      
+      console.log(`🎉 [Registration] Welcome email dispatched to: ${user.email} (${role})`);
+    } catch (emailError) {
+      console.error("❌ [Registration] Failed to send welcome email. User was still created.", emailError);
+      // We do not throw or return a 500 here, because the account was successfully created.
+    }
+    // --- END EMAIL DISPATCH ---
 
     return res.status(201).json({
       success: true,
