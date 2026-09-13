@@ -180,7 +180,7 @@ export const registerUser = async (req, res) => {
                       <tr>
                         <td align="left">
                           <img
-                            src="${process.env.LOGO_URL || "https://courierx.vercel.app/courierx-logo.png"}"
+                            src="${process.env.LOGO_URL || "https://courierx.vercel.app/topLogo.png"}"
                             alt="CourierX"
                             width="145"
                             style="display:block; max-width:145px; height:auto;"
@@ -637,7 +637,7 @@ export const registerUser = async (req, res) => {
                   ">
 
                     <img
-                      src="${process.env.LOGO_URL || "https://courierx.vercel.app/courierx-logo.png"}"
+                      src="${process.env.LOGO_URL || "https://courierx.vercel.app/topLogo.png"}"
                       alt="CourierX"
                       width="110"
                       style="display:inline-block; max-width:110px; height:auto; margin-bottom:12px;"
@@ -703,7 +703,7 @@ export const registerUser = async (req, res) => {
 
                         <td align="left">
                           <img
-                            src="${process.env.LOGO_URL || "https://courierx.vercel.app/courierx-logo.png"}"
+                            src="${process.env.LOGO_URL || "https://courierx.vercel.app/topLogo.png"}"
                             alt="CourierX"
                             width="145"
                             style="display:block; max-width:145px; height:auto;"
@@ -1157,7 +1157,7 @@ export const registerUser = async (req, res) => {
                   ">
 
                     <img
-                      src="${process.env.LOGO_URL || "https://courierx.vercel.app/courierx-logo.png"}"
+                      src="${process.env.LOGO_URL || "https://courierx.vercel.app/topLogo.png"}"
                       alt="CourierX"
                       width="110"
                       style="display:inline-block; max-width:110px; height:auto; margin-bottom:12px;"
