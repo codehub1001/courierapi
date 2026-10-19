@@ -201,6 +201,7 @@ export const getVendorOverview = async (req, res) => {
 | The vendor is automatically obtained from the logged-in user.
 |--------------------------------------------------------------------------
 */
+
 export const createDelivery = async (req, res) => {
   try {
     const {
@@ -211,34 +212,52 @@ export const createDelivery = async (req, res) => {
       packageWeight,
       deliveryInstructions,
       isPeakHour = false,
-
-      // 📍 CUSTOM PICKUP (Optional: overrides vendor default profile address)
       pickupAddress: customPickupAddress,
-
-      // PRICE CONFIRMATION
       confirmed = false,
     } = req.body;
 
     // =====================================================
-    // 1. VALIDATE DELIVERY DATA
+    // 1. VALIDATE REQUIRED FIELDS
     // =====================================================
     if (
-      !recipientName?.trim() ||
-      !recipientPhone?.trim() ||
-      !recipientAddress?.trim() ||
-      !packageType?.trim()
+      typeof recipientName !== "string" ||
+      !recipientName.trim() ||
+      typeof recipientPhone !== "string" ||
+      !recipientPhone.trim() ||
+      typeof recipientAddress !== "string" ||
+      !recipientAddress.trim() ||
+      typeof packageType !== "string" ||
+      !packageType.trim()
     ) {
-      console.log("❌ Validation Error: Missing required fields", {
-        recipientName,
-        recipientPhone,
-        recipientAddress,
-        packageType,
-      });
-
       return res.status(400).json({
         success: false,
         message:
-          "Recipient name, phone, address, and package type are required",
+          "Recipient name, phone, address, and package type are required.",
+      });
+    }
+
+    if (
+      customPickupAddress !== undefined &&
+      customPickupAddress !== null &&
+      typeof customPickupAddress !== "string"
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "The custom pickup address must be a valid string.",
+      });
+    }
+
+    if (typeof confirmed !== "boolean") {
+      return res.status(400).json({
+        success: false,
+        message: "The confirmed field must be a boolean.",
+      });
+    }
+
+    if (typeof isPeakHour !== "boolean") {
+      return res.status(400).json({
+        success: false,
+        message: "The isPeakHour field must be a boolean.",
       });
     }
 
@@ -246,59 +265,120 @@ export const createDelivery = async (req, res) => {
     // 2. FIND VENDOR
     // =====================================================
     const vendor = await prisma.vendorProfile.findUnique({
-      where: { userId: req.user.id },
+      where: {
+        userId: req.user.id,
+      },
     });
 
     if (!vendor) {
-      console.log(
-        "❌ Vendor Error: Vendor profile not found for user ID:",
-        req.user?.id
-      );
-
       return res.status(404).json({
         success: false,
-        message: "Vendor profile not found",
+        message: "Vendor profile not found.",
       });
     }
 
     // =====================================================
-    // 3. DETERMINE & VALIDATE ACTIVE PICKUP ADDRESS
+    // 3. DETERMINE PICKUP ADDRESS
     // =====================================================
-    const activePickupAddress = customPickupAddress?.trim() || vendor.businessAddress;
+    const activePickupAddress =
+      customPickupAddress?.trim() || vendor.businessAddress?.trim();
 
     if (!activePickupAddress) {
-      console.log("❌ Address Error: Pickup address is missing.");
-
       return res.status(400).json({
         success: false,
         message:
-          "A valid pickup address is required before creating a delivery",
+          "A pickup address is required. Please update your business address or enter a pickup address.",
+      });
+    }
+
+    const cleanedRecipientAddress = recipientAddress.trim();
+
+    // =====================================================
+    // 4. GEOCODE PICKUP — NO FALLBACK COORDINATES
+    // =====================================================
+    console.log("📍 Geocoding pickup address:", activePickupAddress);
+
+    const pickupLocation = await geocodeAddress(activePickupAddress);
+
+    if (!pickupLocation) {
+      return res.status(400).json({
+        success: false,
+        location: "pickup",
+        message:
+          "We couldn't verify your pickup address. Please enter a more specific address or select the pickup point on a map.",
       });
     }
 
     // =====================================================
-    // 4. GEOCODE PICKUP LOCATION
+    // 5. GEOCODE RECIPIENT — NO FALLBACK COORDINATES
     // =====================================================
-    console.log("📍 Geocoding pickup address:", activePickupAddress);
+    console.log("📍 Geocoding recipient address:", cleanedRecipientAddress);
 
-    let pickupLocation = await geocodeAddress(activePickupAddress);
+    const deliveryLocation = await geocodeAddress(
+      cleanedRecipientAddress
+    );
 
-    if (!pickupLocation) {
-      console.log(
-        "⚠️ Geocoding failed for pickup address. Using fallback coordinates."
-      );
-
-      pickupLocation = {
-        latitude: vendor.latitude || 6.5244,
-        longitude: vendor.longitude || 3.3792,
-        isApproximate: true,
-      };
+    if (!deliveryLocation) {
+      return res.status(400).json({
+        success: false,
+        location: "recipient",
+        message:
+          "We couldn't verify the recipient's address. Please enter a more specific address or select the drop-off point on a map.",
+      });
     }
 
-    // Update default vendor profile coordinates only if they were missing and default address was used
-    if (!customPickupAddress && (!vendor.latitude || !vendor.longitude)) {
+    // =====================================================
+    // 6. VALIDATE GEOCODING PRECISION
+    // =====================================================
+    const hasPreciseLocation = (location) =>
+      location &&
+      location.precision === "EXACT" &&
+      location.isApproximate === false &&
+      Number.isFinite(location.latitude) &&
+      Number.isFinite(location.longitude) &&
+      location.latitude >= -90 &&
+      location.latitude <= 90 &&
+      location.longitude >= -180 &&
+      location.longitude <= 180;
+
+    if (!hasPreciseLocation(pickupLocation)) {
+      return res.status(400).json({
+        success: false,
+        location: "pickup",
+        message:
+          "The pickup location could not be verified precisely. Please provide a more specific address or confirm the exact point on a map.",
+      });
+    }
+
+    if (!hasPreciseLocation(deliveryLocation)) {
+      return res.status(400).json({
+        success: false,
+        location: "recipient",
+        message:
+          "The recipient's location could not be verified precisely. Please provide a more specific address or confirm the exact point on a map.",
+      });
+    }
+
+    // =====================================================
+    // 7. SAVE VERIFIED DEFAULT VENDOR COORDINATES
+    // =====================================================
+    // Only update the profile when the default business address
+    // was used and its coordinates are missing or invalid.
+    const validStoredCoordinates =
+      Number.isFinite(Number(vendor.latitude)) &&
+      Number.isFinite(Number(vendor.longitude)) &&
+      vendor.latitude !== null &&
+      vendor.longitude !== null &&
+      Number(vendor.latitude) >= -90 &&
+      Number(vendor.latitude) <= 90 &&
+      Number(vendor.longitude) >= -180 &&
+      Number(vendor.longitude) <= 180;
+
+    if (!customPickupAddress?.trim() && !validStoredCoordinates) {
       await prisma.vendorProfile.update({
-        where: { id: vendor.id },
+        where: {
+          id: vendor.id,
+        },
         data: {
           latitude: pickupLocation.latitude,
           longitude: pickupLocation.longitude,
@@ -307,28 +387,7 @@ export const createDelivery = async (req, res) => {
     }
 
     // =====================================================
-    // 5. GEOCODE DROPOFF LOCATION
-    // =====================================================
-    const cleanedRecipientAddress = recipientAddress.trim();
-
-    console.log("📍 Geocoding recipient address:", cleanedRecipientAddress);
-
-    let deliveryLocation = await geocodeAddress(cleanedRecipientAddress);
-
-    if (!deliveryLocation) {
-      console.log(
-        "⚠️ Geocoding failed for Recipient Address. Using fallback coordinates."
-      );
-
-      deliveryLocation = {
-        latitude: 6.4474,
-        longitude: 3.4722,
-        isApproximate: true,
-      };
-    }
-
-    // =====================================================
-    // 6. CALCULATE ACTUAL ROAD DISTANCE (OSRM)
+    // 8. CALCULATE ROAD DISTANCE
     // =====================================================
     const route = await getRoadRoute(
       pickupLocation.latitude,
@@ -337,25 +396,52 @@ export const createDelivery = async (req, res) => {
       deliveryLocation.longitude
     );
 
-    if (!route) {
+    if (
+      !route ||
+      !Number.isFinite(route.distanceMeters) ||
+      route.distanceMeters <= 0
+    ) {
       return res.status(400).json({
         success: false,
         message:
-          "Unable to calculate a road route between pickup and destination.",
+          "We couldn't calculate a valid road route between the pickup and destination. Please verify both addresses and try again.",
       });
     }
 
     const distanceInKm = route.distanceMeters / 1000;
 
+    if (!Number.isFinite(distanceInKm) || distanceInKm <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "The calculated delivery distance is invalid.",
+      });
+    }
+
     // =====================================================
-    // 7. CALCULATE PRICING VIA PRICING UTILITY
+    // 9. CALCULATE DELIVERY PRICE
     // =====================================================
     const pricingBreakdown = calculateDeliveryFee({
       distanceInKm,
-      isPeakHour: Boolean(isPeakHour),
+      isPeakHour,
     });
 
     const { riderFee, totalFare, systemFee } = pricingBreakdown;
+
+    if (
+      !Number.isFinite(riderFee) ||
+      !Number.isFinite(totalFare) ||
+      !Number.isFinite(systemFee) ||
+      riderFee <= 0 ||
+      totalFare < riderFee
+    ) {
+      console.error("Invalid pricing breakdown:", pricingBreakdown);
+
+      return res.status(500).json({
+        success: false,
+        message:
+          "We couldn't calculate the delivery fee. Please try again.",
+      });
+    }
 
     const pricing = {
       distanceKm: Number(distanceInKm.toFixed(2)),
@@ -365,11 +451,11 @@ export const createDelivery = async (req, res) => {
     };
 
     // =====================================================
-    // 8. PRICE CONFIRMATION STAGE
+    // 10. PRICE CONFIRMATION
     // =====================================================
     if (!confirmed) {
       console.log(
-        "💰 Price calculated. Waiting for vendor confirmation:",
+        "💰 Delivery quote calculated:",
         pricing
       );
 
@@ -378,28 +464,23 @@ export const createDelivery = async (req, res) => {
         requiresConfirmation: true,
         message:
           "Please confirm the delivery fee before creating the delivery.",
-        pricing: {
-          totalFare,
-          riderFee,
-          systemFee: pricing.systemFee,
-          distanceKm: pricing.distanceKm,
-        },
+        pricing,
       });
     }
 
     // =====================================================
-    // 9. GENERATE TRACKING ID & 4-DIGIT PIN
+    // 11. GENERATE TRACKING ID AND DELIVERY PIN
     // =====================================================
     const trackingId = `CXR-${Date.now()}-${Math.floor(
       100 + Math.random() * 900
     )}`;
 
-    const deliveryPin = Math.floor(1000 + Math.random() * 9000).toString();
-
-    console.log("🔐 Delivery PIN generated:", deliveryPin);
+    const deliveryPin = Math.floor(
+      1000 + Math.random() * 9000
+    ).toString();
 
     // =====================================================
-    // 10. CREATE DELIVERY WITH GEOLOCATION DATA
+    // 12. CREATE DELIVERY
     // =====================================================
     const delivery = await prisma.delivery.create({
       data: {
@@ -410,16 +491,22 @@ export const createDelivery = async (req, res) => {
         recipientPhone: recipientPhone.trim(),
         recipientAddress: cleanedRecipientAddress,
 
-        // 📍 STORED PICKUP & DROPOFF DATA
         pickupAddress: activePickupAddress,
         pickupLatitude: pickupLocation.latitude,
         pickupLongitude: pickupLocation.longitude,
+
         recipientLatitude: deliveryLocation.latitude,
         recipientLongitude: deliveryLocation.longitude,
 
         packageType: packageType.trim(),
-        packageWeight: packageWeight?.trim() || null,
-        deliveryInstructions: deliveryInstructions?.trim() || null,
+        packageWeight:
+          typeof packageWeight === "string"
+            ? packageWeight.trim() || null
+            : null,
+        deliveryInstructions:
+          typeof deliveryInstructions === "string"
+            ? deliveryInstructions.trim() || null
+            : null,
 
         riderFee,
         deliveryFee: totalFare,
@@ -430,19 +517,31 @@ export const createDelivery = async (req, res) => {
     });
 
     // =====================================================
-    // 11. DISPATCH TO NEARBY RIDERS (REUSABLE HELPER)
+    // 13. DISPATCH TO NEARBY RIDERS
     // =====================================================
-    const closestRiders = await dispatchDeliveryToNearbyRiders(delivery);
+    let closestRiders = [];
+
+    try {
+      closestRiders =
+        (await dispatchDeliveryToNearbyRiders(delivery)) ?? [];
+    } catch (dispatchError) {
+      // The delivery has already been created. Do not return a
+      // generic creation failure that could cause duplicate retries.
+      console.error(
+        "⚠️ Delivery created, but rider dispatch failed:",
+        dispatchError
+      );
+    }
 
     // =====================================================
-    // 12. RETURN RESPONSE
+    // 14. RETURN RESPONSE
     // =====================================================
     return res.status(201).json({
       success: true,
       message:
         closestRiders.length > 0
           ? "Delivery created successfully. Nearby riders have been notified."
-          : "Delivery created successfully, but no available riders were found.",
+          : "Delivery created successfully. No riders were notified yet.",
       delivery,
       pricing: {
         totalFare,
@@ -456,11 +555,13 @@ export const createDelivery = async (req, res) => {
       closestRiders: closestRiders.map((rider) => ({
         id: rider.id,
         userId: rider.userId,
-        user: {
-          id: rider.user.id,
-          fullName: rider.user.fullName,
-          phone: rider.user.phone,
-        },
+        user: rider.user
+          ? {
+              id: rider.user.id,
+              fullName: rider.user.fullName,
+              phone: rider.user.phone,
+            }
+          : null,
         vehicleNumber: rider.vehicleNumber,
         deliveryArea: rider.deliveryArea,
         isVerified: rider.isVerified,
@@ -471,14 +572,16 @@ export const createDelivery = async (req, res) => {
       })),
     });
   } catch (error) {
-    console.error("❌ Create delivery unhandled error:", error);
+    console.error("❌ Create delivery error:", error);
 
     return res.status(500).json({
       success: false,
-      message: "Failed to create delivery. Please try again later.",
+      message:
+        "Failed to create delivery. Please try again later.",
     });
   }
 };
+
 // =========================================
 // CHECK DELIVERY ASSIGNMENT STATUS
 // =========================================
