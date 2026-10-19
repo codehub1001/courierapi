@@ -1,5 +1,5 @@
 /**
- * utils/geocoding.js
+ * utils/geocodeAddress.js
  *
  * Swiftbox Lagos geocoding service.
  *
@@ -138,7 +138,7 @@ const hasValidCoordinates = (latitude, longitude) =>
   longitude >= -180 &&
   longitude <= 180;
 
-const isInsideLagosBounds = (latitude, longitude) =>
+export const isInsideLagosBounds = (latitude, longitude) =>
   latitude >= LAGOS_BOUNDS.minLat &&
   latitude <= LAGOS_BOUNDS.maxLat &&
   longitude >= LAGOS_BOUNDS.minLon &&

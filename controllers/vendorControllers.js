@@ -1,5 +1,6 @@
+import { createHash, randomInt } from "node:crypto";
 import prisma from "../prismaClient.js";
-import { geocodeAddress } from "../utils/geocodeAddress.js";
+import { geocodeAddress, isInsideLagosBounds } from "../utils/geocodeAddress.js";
 import { sendNotification } from "../utils/sendNotification.js";
 import { getRoadRoute } from "../utils/routing.js";
 import { calculateDeliveryFee } from "../utils/pricing.js";
@@ -194,349 +195,338 @@ export const getVendorOverview = async (req, res) => {
 
 /*
 |--------------------------------------------------------------------------
-| CREATE DELIVERY
+| CREATE DELIVERY — helpers (module-private)
 |--------------------------------------------------------------------------
-| POST /api/vendor/deliveries
-|--------------------------------------------------------------------------
-| The vendor is automatically obtained from the logged-in user.
+| Two-step flow on POST /api/vendor/deliveries:
+|   confirmed=false -> quote            confirmed=true -> create + dispatch
+|
+| Location policy (geocoder precision -> action):
+|   EXACT / STREET   accepted ("right street, house number unverified").
+|   AREA / not found rejected: LOCATION_NEEDS_CONFIRMATION / ADDRESS_NOT_FOUND.
+|                    The AREA response carries `suggestedLocation` to centre a map on.
+|   pickupCoordinates / recipientCoordinates ({ latitude, longitude })
+|                    a customer-confirmed pin overrides geocoding (must be inside Lagos).
+|
+| Optional: send `confirmedTotalFare` (the totalFare from the quote) with confirmed=true.
+| If the fare has moved since the quote, the request is refused with 409 PRICE_CHANGED.
+|
+| Errors keep the original { success: false, message, location? } shape and add `code`.
 |--------------------------------------------------------------------------
 */
 
-export const createDelivery = async (req, res) => {
-  try {
-    const {
-      recipientName,
-      recipientPhone,
-      recipientAddress,
-      packageType,
-      packageWeight,
-      deliveryInstructions,
-      isPeakHour = false,
-      pickupAddress: customPickupAddress,
-      confirmed = false,
-    } = req.body;
+const MAX_LEN = {
+  name: 100,
+  address: 300, // matches the geocoder's limit
+  packageType: 60,
+  packageWeight: 40,
+  instructions: 500,
+};
 
-    // =====================================================
-    // 1. VALIDATE REQUIRED FIELDS
-    // =====================================================
-    if (
-      typeof recipientName !== "string" ||
-      !recipientName.trim() ||
-      typeof recipientPhone !== "string" ||
-      !recipientPhone.trim() ||
-      typeof recipientAddress !== "string" ||
-      !recipientAddress.trim() ||
-      typeof packageType !== "string" ||
-      !packageType.trim()
-    ) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "Recipient name, phone, address, and package type are required.",
-      });
-    }
+const MAX_DELIVERY_DISTANCE_KM =
+  Number(process.env.MAX_DELIVERY_DISTANCE_KM) || 100;
+const FARE_TOLERANCE = 0.005; // naira
+const DUPLICATE_WINDOW_MS = 30_000;
+const TRACKING_ID_ATTEMPTS = 3;
 
-    if (
-      customPickupAddress !== undefined &&
-      customPickupAddress !== null &&
-      typeof customPickupAddress !== "string"
-    ) {
-      return res.status(400).json({
-        success: false,
-        message: "The custom pickup address must be a valid string.",
-      });
-    }
+class ApiError extends Error {
+  constructor(status, code, message, extra = {}) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.code = code;
+    this.extra = extra;
+  }
+}
 
-    if (typeof confirmed !== "boolean") {
-      return res.status(400).json({
-        success: false,
-        message: "The confirmed field must be a boolean.",
-      });
-    }
+const toNumber = (value) => {
+  if (typeof value === "number") return value;
+  if (typeof value === "string" && value.trim() !== "") return Number(value);
+  return NaN;
+};
 
-    if (typeof isPeakHour !== "boolean") {
-      return res.status(400).json({
-        success: false,
-        message: "The isPeakHour field must be a boolean.",
-      });
-    }
+const round6 = (n) => Math.round(n * 1e6) / 1e6;
 
-    // =====================================================
-    // 2. FIND VENDOR
-    // =====================================================
-    const vendor = await prisma.vendorProfile.findUnique({
-      where: {
-        userId: req.user.id,
-      },
-    });
-
-    if (!vendor) {
-      return res.status(404).json({
-        success: false,
-        message: "Vendor profile not found.",
-      });
-    }
-
-    // =====================================================
-    // 3. DETERMINE PICKUP ADDRESS
-    // =====================================================
-    const activePickupAddress =
-      customPickupAddress?.trim() || vendor.businessAddress?.trim();
-
-    if (!activePickupAddress) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "A pickup address is required. Please update your business address or enter a pickup address.",
-      });
-    }
-
-    const cleanedRecipientAddress = recipientAddress.trim();
-
-    // =====================================================
-    // 4. GEOCODE PICKUP — NO FALLBACK COORDINATES
-    // =====================================================
-    console.log("📍 Geocoding pickup address:", activePickupAddress);
-
-    const pickupLocation = await geocodeAddress(activePickupAddress);
-
-    if (!pickupLocation) {
-      return res.status(400).json({
-        success: false,
-        location: "pickup",
-        message:
-          "We couldn't verify your pickup address. Please enter a more specific address or select the pickup point on a map.",
-      });
-    }
-
-    // =====================================================
-    // 5. GEOCODE RECIPIENT — NO FALLBACK COORDINATES
-    // =====================================================
-    console.log("📍 Geocoding recipient address:", cleanedRecipientAddress);
-
-    const deliveryLocation = await geocodeAddress(
-      cleanedRecipientAddress
+const requiredText = (value, field, label, max) => {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new ApiError(400, "INVALID_INPUT", `${label} is required.`, { field });
+  }
+  const text = value.trim();
+  if (text.length > max) {
+    throw new ApiError(
+      400,
+      "INVALID_INPUT",
+      `${label} must be at most ${max} characters.`,
+      { field }
     );
+  }
+  return text;
+};
 
-    if (!deliveryLocation) {
-      return res.status(400).json({
-        success: false,
-        location: "recipient",
-        message:
-          "We couldn't verify the recipient's address. Please enter a more specific address or select the drop-off point on a map.",
-      });
-    }
-
-    // =====================================================
-    // 6. VALIDATE GEOCODING PRECISION
-    // =====================================================
-    const hasPreciseLocation = (location) =>
-      location &&
-      location.precision === "EXACT" &&
-      location.isApproximate === false &&
-      Number.isFinite(location.latitude) &&
-      Number.isFinite(location.longitude) &&
-      location.latitude >= -90 &&
-      location.latitude <= 90 &&
-      location.longitude >= -180 &&
-      location.longitude <= 180;
-
-    if (!hasPreciseLocation(pickupLocation)) {
-      return res.status(400).json({
-        success: false,
-        location: "pickup",
-        message:
-          "The pickup location could not be verified precisely. Please provide a more specific address or confirm the exact point on a map.",
-      });
-    }
-
-    if (!hasPreciseLocation(deliveryLocation)) {
-      return res.status(400).json({
-        success: false,
-        location: "recipient",
-        message:
-          "The recipient's location could not be verified precisely. Please provide a more specific address or confirm the exact point on a map.",
-      });
-    }
-
-    // =====================================================
-    // 7. SAVE VERIFIED DEFAULT VENDOR COORDINATES
-    // =====================================================
-    // Only update the profile when the default business address
-    // was used and its coordinates are missing or invalid.
-    const validStoredCoordinates =
-      Number.isFinite(Number(vendor.latitude)) &&
-      Number.isFinite(Number(vendor.longitude)) &&
-      vendor.latitude !== null &&
-      vendor.longitude !== null &&
-      Number(vendor.latitude) >= -90 &&
-      Number(vendor.latitude) <= 90 &&
-      Number(vendor.longitude) >= -180 &&
-      Number(vendor.longitude) <= 180;
-
-    if (!customPickupAddress?.trim() && !validStoredCoordinates) {
-      await prisma.vendorProfile.update({
-        where: {
-          id: vendor.id,
-        },
-        data: {
-          latitude: pickupLocation.latitude,
-          longitude: pickupLocation.longitude,
-        },
-      });
-    }
-
-    // =====================================================
-    // 8. CALCULATE ROAD DISTANCE
-    // =====================================================
-    const route = await getRoadRoute(
-      pickupLocation.latitude,
-      pickupLocation.longitude,
-      deliveryLocation.latitude,
-      deliveryLocation.longitude
+// Same leniency as before: anything that isn't text becomes null (numbers are kept as text).
+const optionalText = (value, field, label, max) => {
+  const raw =
+    typeof value === "number" && Number.isFinite(value) ? String(value) : value;
+  if (typeof raw !== "string") return null;
+  const text = raw.trim();
+  if (!text) return null;
+  if (text.length > max) {
+    throw new ApiError(
+      400,
+      "INVALID_INPUT",
+      `${label} must be at most ${max} characters.`,
+      { field }
     );
+  }
+  return text;
+};
 
-    if (
-      !route ||
-      !Number.isFinite(route.distanceMeters) ||
-      route.distanceMeters <= 0
-    ) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "We couldn't calculate a valid road route between the pickup and destination. Please verify both addresses and try again.",
-      });
-    }
+// Validates only; the phone is stored exactly as the vendor typed it (trimmed).
+const isPlausiblePhone = (value) => {
+  if (!/^\+?[\d\s\-().]+$/.test(value)) return false;
+  const digits = value.replace(/\D/g, "").length;
+  return digits >= 7 && digits <= 15;
+};
 
-    const distanceInKm = route.distanceMeters / 1000;
+const parsePin = (raw, field) => {
+  if (raw === undefined || raw === null) return null;
+  const latitude = toNumber(raw?.latitude);
+  const longitude = toNumber(raw?.longitude);
 
-    if (!Number.isFinite(distanceInKm) || distanceInKm <= 0) {
-      return res.status(400).json({
-        success: false,
-        message: "The calculated delivery distance is invalid.",
-      });
-    }
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+    throw new ApiError(400, "INVALID_COORDINATES", "The selected map point is invalid.", { field });
+  }
+  if (!isInsideLagosBounds(latitude, longitude)) {
+    throw new ApiError(
+      400,
+      "OUTSIDE_SERVICE_AREA",
+      "The selected map point is outside our Lagos delivery area.",
+      { field }
+    );
+  }
+  return { latitude: round6(latitude), longitude: round6(longitude) };
+};
 
-    // =====================================================
-    // 9. CALCULATE DELIVERY PRICE
-    // =====================================================
-    const pricingBreakdown = calculateDeliveryFee({
-      distanceInKm,
-      isPeakHour,
+const parseCreateDeliveryInput = (body) => {
+  const b = body && typeof body === "object" ? body : {};
+
+  const recipientName = requiredText(b.recipientName, "recipientName", "Recipient name", MAX_LEN.name);
+
+  const recipientPhone = requiredText(b.recipientPhone, "recipientPhone", "Recipient phone", 32);
+  if (!isPlausiblePhone(recipientPhone)) {
+    throw new ApiError(400, "INVALID_PHONE", "Please enter a valid phone number for the recipient.", {
+      field: "recipientPhone",
     });
+  }
 
-    const { riderFee, totalFare, systemFee } = pricingBreakdown;
+  const recipientAddress = requiredText(b.recipientAddress, "recipientAddress", "Recipient address", MAX_LEN.address);
+  const packageType = requiredText(b.packageType, "packageType", "Package type", MAX_LEN.packageType);
 
-    if (
-      !Number.isFinite(riderFee) ||
-      !Number.isFinite(totalFare) ||
-      !Number.isFinite(systemFee) ||
-      riderFee <= 0 ||
-      totalFare < riderFee
-    ) {
-      console.error("Invalid pricing breakdown:", pricingBreakdown);
-
-      return res.status(500).json({
-        success: false,
-        message:
-          "We couldn't calculate the delivery fee. Please try again.",
+  let customPickupAddress = null;
+  if (b.pickupAddress !== undefined && b.pickupAddress !== null) {
+    if (typeof b.pickupAddress !== "string") {
+      throw new ApiError(400, "INVALID_INPUT", "The custom pickup address must be a valid string.", {
+        field: "pickupAddress",
       });
     }
+    customPickupAddress = b.pickupAddress.trim() || null;
+    if (customPickupAddress && customPickupAddress.length > MAX_LEN.address) {
+      throw new ApiError(
+        400,
+        "INVALID_INPUT",
+        `Pickup address must be at most ${MAX_LEN.address} characters.`,
+        { field: "pickupAddress", location: "pickup" }
+      );
+    }
+  }
 
-    const pricing = {
-      distanceKm: Number(distanceInKm.toFixed(2)),
-      riderFee,
-      systemFee,
-      totalFare,
+  const confirmed = b.confirmed ?? false;
+  if (typeof confirmed !== "boolean") {
+    throw new ApiError(400, "INVALID_INPUT", "The confirmed field must be a boolean.", { field: "confirmed" });
+  }
+
+  const isPeakHour = b.isPeakHour ?? false;
+  if (typeof isPeakHour !== "boolean") {
+    throw new ApiError(400, "INVALID_INPUT", "The isPeakHour field must be a boolean.", { field: "isPeakHour" });
+  }
+
+  let confirmedTotalFare = null;
+  if (b.confirmedTotalFare !== undefined && b.confirmedTotalFare !== null) {
+    confirmedTotalFare = toNumber(b.confirmedTotalFare);
+    if (!Number.isFinite(confirmedTotalFare) || confirmedTotalFare <= 0) {
+      throw new ApiError(400, "INVALID_INPUT", "The confirmedTotalFare field must be a positive number.", {
+        field: "confirmedTotalFare",
+      });
+    }
+  }
+
+  return {
+    recipientName,
+    recipientPhone,
+    recipientAddress,
+    packageType,
+    packageWeight: optionalText(b.packageWeight, "packageWeight", "Package weight", MAX_LEN.packageWeight),
+    deliveryInstructions: optionalText(
+      b.deliveryInstructions,
+      "deliveryInstructions",
+      "Delivery instructions",
+      MAX_LEN.instructions
+    ),
+    customPickupAddress,
+    pickupCoordinates: parsePin(b.pickupCoordinates, "pickupCoordinates"),
+    recipientCoordinates: parsePin(b.recipientCoordinates, "recipientCoordinates"),
+    isPeakHour,
+    confirmed,
+    confirmedTotalFare,
+  };
+};
+
+const LOCATION_COPY = {
+  pickup: {
+    notFound:
+      "We couldn't verify your pickup address. Please enter a more specific address or select the pickup point on a map.",
+    needsPin:
+      "We could only place your pickup address to the nearest area. Please confirm the exact pickup point on the map.",
+  },
+  recipient: {
+    notFound:
+      "We couldn't verify the recipient's address. Please enter a more specific address or select the drop-off point on a map.",
+    needsPin:
+      "We could only place the recipient's address to the nearest area. Please confirm the exact drop-off point on the map.",
+  },
+};
+
+const resolveLocation = async ({ role, address, pin }) => {
+  // A customer-confirmed pin is authoritative and saves an upstream geocoding call.
+  if (pin) {
+    return {
+      latitude: pin.latitude,
+      longitude: pin.longitude,
+      displayName: address,
+      precision: "EXACT",
+      isApproximate: false,
+      source: "USER_CONFIRMED_PIN",
     };
+  }
 
-    // =====================================================
-    // 10. PRICE CONFIRMATION
-    // =====================================================
-    if (!confirmed) {
-      console.log(
-        "💰 Delivery quote calculated:",
-        pricing
-      );
+  const geocoded = await geocodeAddress(address); // never throws; null when unresolved
 
-      return res.status(200).json({
-        success: true,
-        requiresConfirmation: true,
-        message:
-          "Please confirm the delivery fee before creating the delivery.",
-        pricing,
-      });
-    }
+  if (!geocoded) {
+    throw new ApiError(400, "ADDRESS_NOT_FOUND", LOCATION_COPY[role].notFound, { location: role });
+  }
 
-    // =====================================================
-    // 11. GENERATE TRACKING ID AND DELIVERY PIN
-    // =====================================================
-    const trackingId = `CXR-${Date.now()}-${Math.floor(
-      100 + Math.random() * 900
-    )}`;
-
-    const deliveryPin = Math.floor(
-      1000 + Math.random() * 9000
-    ).toString();
-
-    // =====================================================
-    // 12. CREATE DELIVERY
-    // =====================================================
-    const delivery = await prisma.delivery.create({
-      data: {
-        trackingId,
-        vendorId: vendor.id,
-
-        recipientName: recipientName.trim(),
-        recipientPhone: recipientPhone.trim(),
-        recipientAddress: cleanedRecipientAddress,
-
-        pickupAddress: activePickupAddress,
-        pickupLatitude: pickupLocation.latitude,
-        pickupLongitude: pickupLocation.longitude,
-
-        recipientLatitude: deliveryLocation.latitude,
-        recipientLongitude: deliveryLocation.longitude,
-
-        packageType: packageType.trim(),
-        packageWeight:
-          typeof packageWeight === "string"
-            ? packageWeight.trim() || null
-            : null,
-        deliveryInstructions:
-          typeof deliveryInstructions === "string"
-            ? deliveryInstructions.trim() || null
-            : null,
-
-        riderFee,
-        deliveryFee: totalFare,
-        deliveryPin,
-
-        status: "PENDING",
+  if (geocoded.precision !== "EXACT" && geocoded.precision !== "STREET") {
+    throw new ApiError(400, "LOCATION_NEEDS_CONFIRMATION", LOCATION_COPY[role].needsPin, {
+      location: role,
+      suggestedLocation: {
+        latitude: geocoded.latitude,
+        longitude: geocoded.longitude,
+        precision: geocoded.precision,
+        source: geocoded.source,
       },
     });
+  }
 
-    // =====================================================
-    // 13. DISPATCH TO NEARBY RIDERS
-    // =====================================================
-    let closestRiders = [];
+  return geocoded;
+};
 
+// Same format as before (CXR-<ms>-<3 digits>) but from a CSPRNG; collisions are retried.
+const generateTrackingId = () => `CXR-${Date.now()}-${randomInt(100, 1000)}`;
+const generateDeliveryPin = () => String(randomInt(1000, 10000));
+
+const hasValidStoredCoordinates = (vendor) => {
+  if (vendor.latitude == null || vendor.longitude == null) return false;
+  const lat = Number(vendor.latitude);
+  const lon = Number(vendor.longitude);
+  return Number.isFinite(lat) && Number.isFinite(lon) && isInsideLagosBounds(lat, lon);
+};
+
+// Per-process guard against double-clicks / client retries creating the same delivery twice.
+// For multi-instance deployments, back this with an Idempotency-Key column + unique index.
+const recentCreates = new Map(); // fingerprint -> { promise, expiresAt }
+
+const purgeExpiredCreates = () => {
+  const now = Date.now();
+  for (const [key, entry] of recentCreates) {
+    if (entry.expiresAt <= now) recentCreates.delete(key);
+  }
+};
+
+const createDeliveryRecord = async ({ vendor, input, pickupAddress, pickupLocation, deliveryLocation, pricing }) => {
+  for (let attempt = 1; ; attempt += 1) {
     try {
-      closestRiders =
-        (await dispatchDeliveryToNearbyRiders(delivery)) ?? [];
-    } catch (dispatchError) {
-      // The delivery has already been created. Do not return a
-      // generic creation failure that could cause duplicate retries.
-      console.error(
-        "⚠️ Delivery created, but rider dispatch failed:",
-        dispatchError
-      );
-    }
+      return await prisma.delivery.create({
+        data: {
+          trackingId: generateTrackingId(),
+          vendorId: vendor.id,
 
-    // =====================================================
-    // 14. RETURN RESPONSE
-    // =====================================================
-    return res.status(201).json({
+          recipientName: input.recipientName,
+          recipientPhone: input.recipientPhone,
+          recipientAddress: input.recipientAddress,
+
+          pickupAddress,
+          pickupLatitude: pickupLocation.latitude,
+          pickupLongitude: pickupLocation.longitude,
+
+          recipientLatitude: deliveryLocation.latitude,
+          recipientLongitude: deliveryLocation.longitude,
+
+          packageType: input.packageType,
+          packageWeight: input.packageWeight,
+          deliveryInstructions: input.deliveryInstructions,
+
+          riderFee: pricing.riderFee,
+          deliveryFee: pricing.totalFare,
+          deliveryPin: generateDeliveryPin(),
+
+          status: "PENDING",
+        },
+      });
+    } catch (error) {
+      // Unique-constraint collision (tracking ID): regenerate and retry.
+      if (error?.code === "P2002" && attempt < TRACKING_ID_ATTEMPTS) continue;
+      throw error;
+    }
+  }
+};
+
+const createAndDispatch = async (ctx) => {
+  const { log, vendor, usingDefaultPickup, pickupLocation, deliveryLocation, pricing } = ctx;
+
+  const delivery = await createDeliveryRecord(ctx);
+
+  // Best-effort: remember a *verified* default pickup point (EXACT or customer-confirmed pin).
+  if (usingDefaultPickup && pickupLocation.precision === "EXACT" && !hasValidStoredCoordinates(vendor)) {
+    try {
+      await prisma.vendorProfile.update({
+        where: { id: vendor.id },
+        data: { latitude: pickupLocation.latitude, longitude: pickupLocation.longitude },
+      });
+    } catch (error) {
+      log.warn({ vendorId: vendor.id, err: error?.message }, "Could not save vendor coordinates");
+    }
+  }
+
+  // The delivery already exists: a dispatch failure must not surface as a creation failure,
+  // or the client will retry and create duplicates.
+  let closestRiders = [];
+  try {
+    const result = await dispatchDeliveryToNearbyRiders(delivery);
+    closestRiders = Array.isArray(result) ? result : [];
+  } catch (error) {
+    log.error(
+      { deliveryId: delivery.id, trackingId: delivery.trackingId, err: error?.message },
+      "Delivery created but rider dispatch failed"
+    );
+  }
+
+  log.info(
+    { deliveryId: delivery.id, trackingId: delivery.trackingId, ridersNotified: closestRiders.length },
+    "Delivery created"
+  );
+
+  return {
+    status: 201,
+    body: {
       success: true,
       message:
         closestRiders.length > 0
@@ -544,9 +534,9 @@ export const createDelivery = async (req, res) => {
           : "Delivery created successfully. No riders were notified yet.",
       delivery,
       pricing: {
-        totalFare,
-        riderFee,
-        systemFee,
+        totalFare: pricing.totalFare,
+        riderFee: pricing.riderFee,
+        systemFee: pricing.systemFee,
         distanceKm: pricing.distanceKm,
       },
       pickupLocation,
@@ -570,14 +560,238 @@ export const createDelivery = async (req, res) => {
         currentLongitude: rider.currentLongitude,
         distanceFromPickup: rider.distanceFromPickup,
       })),
+    },
+  };
+};
+
+/*
+|--------------------------------------------------------------------------
+| CREATE DELIVERY
+|--------------------------------------------------------------------------
+| POST /api/vendor/deliveries
+|--------------------------------------------------------------------------
+| The vendor is automatically obtained from the logged-in user.
+|--------------------------------------------------------------------------
+*/
+
+export const createDelivery = async (req, res) => {
+  const log = req.log ?? console;
+
+  try {
+    // 1. Auth + input ------------------------------------------------------
+    const userId = req.user?.id;
+    if (!userId) {
+      throw new ApiError(401, "UNAUTHENTICATED", "Authentication required.");
+    }
+
+    const input = parseCreateDeliveryInput(req.body);
+
+    // 2. Vendor ------------------------------------------------------------
+    const vendor = await prisma.vendorProfile.findUnique({
+      where: { userId },
     });
+
+    if (!vendor) {
+      throw new ApiError(404, "VENDOR_NOT_FOUND", "Vendor profile not found.");
+    }
+
+    // 3. Pickup address ----------------------------------------------------
+    const usingDefaultPickup = !input.customPickupAddress;
+    const pickupAddress =
+      input.customPickupAddress ?? String(vendor.businessAddress ?? "").trim();
+
+    if (!pickupAddress) {
+      throw new ApiError(
+        400,
+        "PICKUP_ADDRESS_REQUIRED",
+        "A pickup address is required. Please update your business address or enter a pickup address."
+      );
+    }
+    if (pickupAddress.length > MAX_LEN.address) {
+      throw new ApiError(
+        400,
+        "INVALID_INPUT",
+        `Pickup address must be at most ${MAX_LEN.address} characters.`,
+        { field: "pickupAddress", location: "pickup" }
+      );
+    }
+
+    // 4. Resolve both points (a pickup problem is reported first) ------------
+    const [pickupResult, recipientResult] = await Promise.allSettled([
+      resolveLocation({ role: "pickup", address: pickupAddress, pin: input.pickupCoordinates }),
+      resolveLocation({ role: "recipient", address: input.recipientAddress, pin: input.recipientCoordinates }),
+    ]);
+    if (pickupResult.status === "rejected") throw pickupResult.reason;
+    if (recipientResult.status === "rejected") throw recipientResult.reason;
+
+    const pickupLocation = pickupResult.value;
+    const deliveryLocation = recipientResult.value;
+
+    // 5. Road distance -----------------------------------------------------
+    let route;
+    try {
+      route = await getRoadRoute(
+        pickupLocation.latitude,
+        pickupLocation.longitude,
+        deliveryLocation.latitude,
+        deliveryLocation.longitude
+      );
+    } catch (error) {
+      log.warn({ err: error?.message }, "Routing service error");
+      route = null;
+    }
+
+    if (!route || !Number.isFinite(route.distanceMeters) || route.distanceMeters <= 0) {
+      throw new ApiError(
+        400,
+        "ROUTE_UNAVAILABLE",
+        "We couldn't calculate a valid road route between the pickup and destination. Please verify both addresses and try again."
+      );
+    }
+
+    const distanceInKm = route.distanceMeters / 1000;
+
+    if (distanceInKm > MAX_DELIVERY_DISTANCE_KM) {
+      throw new ApiError(
+        400,
+        "DISTANCE_TOO_LONG",
+        `This delivery is beyond our maximum distance of ${MAX_DELIVERY_DISTANCE_KM} km. Please check both addresses.`
+      );
+    }
+
+    // 6. Price -------------------------------------------------------------
+    const pricingBreakdown = calculateDeliveryFee({
+      distanceInKm,
+      isPeakHour: input.isPeakHour,
+    });
+
+    const { riderFee, totalFare, systemFee } = pricingBreakdown ?? {};
+
+    if (
+      !Number.isFinite(riderFee) ||
+      !Number.isFinite(totalFare) ||
+      !Number.isFinite(systemFee) ||
+      riderFee <= 0 ||
+      systemFee < 0 ||
+      totalFare < riderFee
+    ) {
+      log.error({ vendorId: vendor.id, distanceInKm }, "Invalid pricing breakdown");
+      throw new ApiError(500, "PRICING_FAILED", "We couldn't calculate the delivery fee. Please try again.");
+    }
+
+    const pricing = {
+      distanceKm: Number(distanceInKm.toFixed(2)),
+      riderFee,
+      systemFee,
+      totalFare,
+    };
+
+    // 7. Quote -------------------------------------------------------------
+    if (!input.confirmed) {
+      log.info(
+        {
+          vendorId: vendor.id,
+          distanceKm: pricing.distanceKm,
+          totalFare,
+          pickupPrecision: pickupLocation.precision,
+          recipientPrecision: deliveryLocation.precision,
+        },
+        "Delivery quote calculated"
+      );
+
+      return res.status(200).json({
+        success: true,
+        requiresConfirmation: true,
+        message: "Please confirm the delivery fee before creating the delivery.",
+        pricing,
+      });
+    }
+
+    // 8. If the client says which fare it confirmed, it must still be the fare --
+    if (
+      input.confirmedTotalFare !== null &&
+      Math.abs(totalFare - input.confirmedTotalFare) > FARE_TOLERANCE
+    ) {
+      throw new ApiError(
+        409,
+        "PRICE_CHANGED",
+        "The delivery fee has changed since your quote. Please review the new fee and confirm again.",
+        { requiresConfirmation: true, pricing }
+      );
+    }
+
+    // 9. Create (once) and dispatch -----------------------------------------
+    const fingerprint = createHash("sha256")
+      .update(
+        JSON.stringify([
+          vendor.id,
+          input.recipientName,
+          input.recipientPhone,
+          input.recipientAddress,
+          input.packageType,
+          pickupAddress,
+          pickupLocation.latitude,
+          pickupLocation.longitude,
+          deliveryLocation.latitude,
+          deliveryLocation.longitude,
+          totalFare,
+        ])
+      )
+      .digest("hex");
+
+    purgeExpiredCreates();
+
+    const existing = recentCreates.get(fingerprint);
+    if (existing) {
+      let replay = null;
+      try {
+        replay = await existing.promise;
+      } catch {
+        // The first attempt failed; fall through and try again ourselves.
+      }
+      if (replay) {
+        return res.status(replay.status).json({ ...replay.body, idempotentReplay: true });
+      }
+    }
+
+    const job = createAndDispatch({
+      log,
+      vendor,
+      input,
+      pickupAddress,
+      usingDefaultPickup,
+      pickupLocation,
+      deliveryLocation,
+      pricing,
+    });
+    recentCreates.set(fingerprint, { promise: job, expiresAt: Date.now() + DUPLICATE_WINDOW_MS });
+
+    let result;
+    try {
+      result = await job;
+    } catch (error) {
+      recentCreates.delete(fingerprint);
+      throw error;
+    }
+
+    return res.status(result.status).json(result.body);
   } catch (error) {
-    console.error("❌ Create delivery error:", error);
+    if (error instanceof ApiError) {
+      return res.status(error.status).json({
+        success: false,
+        code: error.code,
+        message: error.message,
+        ...error.extra,
+      });
+    }
+
+    log.error({ err: error, requestId: req.id }, "Create delivery error");
 
     return res.status(500).json({
       success: false,
-      message:
-        "Failed to create delivery. Please try again later.",
+      code: "INTERNAL_ERROR",
+      message: "Failed to create delivery. Please try again later.",
+      ...(req.id ? { requestId: String(req.id) } : {}),
     });
   }
 };
