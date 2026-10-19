@@ -202,10 +202,14 @@ export const getVendorOverview = async (req, res) => {
 |
 | Location policy (geocoder precision -> action):
 |   EXACT / STREET   accepted ("right street, house number unverified").
-|   AREA / not found rejected: LOCATION_NEEDS_CONFIRMATION / ADDRESS_NOT_FOUND.
-|                    The AREA response carries `suggestedLocation` to centre a map on.
+|   AREA             accepted. The point is the neighbourhood centre, so the distance and
+|                    fare are estimates. `precision` / `isApproximate` on the returned
+|                    pickupLocation / deliveryLocation say so. Riders rely on the written
+|                    address and the recipient's phone number for the final stretch.
+|   not found        rejected with ADDRESS_NOT_FOUND (the only case a vendor must fix).
 |   pickupCoordinates / recipientCoordinates ({ latitude, longitude })
-|                    a customer-confirmed pin overrides geocoding (must be inside Lagos).
+|                    OPTIONAL pin. If a client sends one it overrides geocoding (must be
+|                    inside Lagos). Vendors are never required to provide it.
 |
 | Optional: send `confirmedTotalFare` (the totalFare from the quote) with confirmed=true.
 | If the fare has moved since the quote, the request is refused with 409 PRICE_CHANGED.
@@ -384,14 +388,10 @@ const LOCATION_COPY = {
   pickup: {
     notFound:
       "We couldn't verify your pickup address. Please enter a more specific address or select the pickup point on a map.",
-    needsPin:
-      "We could only place your pickup address to the nearest area. Please confirm the exact pickup point on the map.",
   },
   recipient: {
     notFound:
       "We couldn't verify the recipient's address. Please enter a more specific address or select the drop-off point on a map.",
-    needsPin:
-      "We could only place the recipient's address to the nearest area. Please confirm the exact drop-off point on the map.",
   },
 };
 
@@ -414,18 +414,8 @@ const resolveLocation = async ({ role, address, pin }) => {
     throw new ApiError(400, "ADDRESS_NOT_FOUND", LOCATION_COPY[role].notFound, { location: role });
   }
 
-  if (geocoded.precision !== "EXACT" && geocoded.precision !== "STREET") {
-    throw new ApiError(400, "LOCATION_NEEDS_CONFIRMATION", LOCATION_COPY[role].needsPin, {
-      location: role,
-      suggestedLocation: {
-        latitude: geocoded.latitude,
-        longitude: geocoded.longitude,
-        precision: geocoded.precision,
-        source: geocoded.source,
-      },
-    });
-  }
-
+  // EXACT, STREET and AREA are all accepted; the precision travels with the location
+  // object so the response (and anyone auditing the order) can see how it was resolved.
   return geocoded;
 };
 
