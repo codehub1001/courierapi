@@ -70,13 +70,11 @@ const getLandmarkAlias = (address) => {
 };
 
 /**
- * Generates intelligent progressive search queries for Nominatim
+ * Generates intelligent progressive search queries for Nominatim without premature returns
  */
 const buildQueries = (address) => {
   const normalized = normalizeAddress(address);
   const alias = getLandmarkAlias(normalized);
-
-  if (alias) return [alias];
 
   // Clean common typos or missing endings
   let cleaned = normalized
@@ -95,6 +93,7 @@ const buildQueries = (address) => {
   const secondaryArea = segments.length > 1 ? segments[1] : "Lagos";
 
   const queries = [
+    alias, // Included as a search option instead of blocking the queue
     `${cleaned}, Lagos, Nigeria`,
     `${withoutHouseNumber}, Lagos, Nigeria`,
     `${primaryStreet}, ${secondaryArea}, Lagos, Nigeria`,
