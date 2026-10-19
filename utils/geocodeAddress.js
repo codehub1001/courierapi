@@ -1,193 +1,264 @@
+
+const NOMINATIM_URL = "https://nominatim.openstreetmap.org/search";
+
+// Broad geographic guard for Lagos-area results.
+// Replace with your actual delivery-zone polygon when available.
+const LAGOS_BOUNDS = {
+  minLat: 6.30,
+  maxLat: 6.90,
+  minLon: 2.65,
+  maxLon: 4.30,
+};
+
+// Nominatim viewbox order: left, top, right, bottom.
+const LAGOS_VIEWBOX = "2.65,6.90,4.30,6.30";
+
+const LANDMARK_ALIASES = {
+  "computer village": "Computer Village, Ikeja, Lagos, Nigeria",
+  "trade fair": "Trade Fair Complex, Lagos, Nigeria",
+  alaba: "Alaba International Market, Ojo, Lagos, Nigeria",
+  balogun: "Balogun Market, Lagos Island, Nigeria",
+  oshodi: "Oshodi, Lagos, Nigeria",
+  cms: "CMS Bus Stop, Lagos Island, Nigeria",
+  "mile 2": "Mile 2, Amuwo-Odofin, Lagos, Nigeria",
+  "lekki phase 1": "Lekki Phase 1, Lagos, Nigeria",
+};
+
+const normalizeAddress = (value) =>
+  value
+    .normalize("NFKC")
+    .replace(/\s+/g, " ")
+    .replace(/\s*,\s*/g, ", ")
+    .trim();
+
+const isInsideLagosBounds = (latitude, longitude) =>
+  latitude >= LAGOS_BOUNDS.minLat &&
+  latitude <= LAGOS_BOUNDS.maxLat &&
+  longitude >= LAGOS_BOUNDS.minLon &&
+  longitude <= LAGOS_BOUNDS.maxLon;
+
+const hasValidCoordinates = (latitude, longitude) =>
+  Number.isFinite(latitude) &&
+  Number.isFinite(longitude) &&
+  latitude >= -90 &&
+  latitude <= 90 &&
+  longitude >= -180 &&
+  longitude <= 180;
+
 /**
- * Top-tier Geocoding service with local coordinate anchoring, 
- * smart sanitization, and zero-failure pricing fallback for CourierX.
- * 
- * @param {string} address - The raw address string input from user or vendor.
- * @returns {Promise<{latitude: number, longitude: number, displayName: string, precision: 'EXACT'|'STREET'|'AREA', isApproximate: boolean, addressDetails: object}|null>}
+ * Classify the quality of a Nominatim match conservatively.
+ * STREET and AREA results are approximate and must not be used
+ * for automatic fare calculation by the current estimateFare controller.
+ */
+const determinePrecision = (result) => {
+  const details = result.address ?? {};
+  const resultClass = String(result.class ?? "").toLowerCase();
+  const resultType = String(result.type ?? "").toLowerCase();
+
+  const hasRoad =
+    Boolean(details.road) ||
+    Boolean(details.pedestrian) ||
+    Boolean(details.footway);
+
+  const hasHouseNumber = Boolean(details.house_number);
+  const hasBuilding = Boolean(details.building);
+
+  // A house number plus a road is the strongest address-level match.
+  // A building label alone is not enough to prove the user's intended
+  // pickup or destination.
+  if (hasHouseNumber && hasRoad) {
+    return {
+      precision: "EXACT",
+      isApproximate: false,
+    };
+  }
+
+  // A named building on a road can be useful, but remains approximate
+  // until the user confirms the location.
+  if (hasBuilding && hasRoad) {
+    return {
+      precision: "STREET",
+      isApproximate: true,
+    };
+  }
+
+  if (
+    hasRoad ||
+    resultClass === "highway" ||
+    ["road", "residential", "tertiary", "secondary", "primary"].includes(
+      resultType
+    )
+  ) {
+    return {
+      precision: "STREET",
+      isApproximate: true,
+    };
+  }
+
+  return {
+    precision: "AREA",
+    isApproximate: true,
+  };
+};
+
+/**
+ * Turn an address into a geocoding query.
+ * Exact landmark searches receive a canonical landmark name.
+ * Other addresses are preserved to avoid losing house numbers
+ * or street details.
+ */
+const buildQuery = (address) => {
+  const normalized = normalizeAddress(address);
+  const lookupKey = normalized
+    .toLowerCase()
+    .replace(/[.,]/g, "")
+    .trim();
+
+  if (LANDMARK_ALIASES[lookupKey]) {
+    return LANDMARK_ALIASES[lookupKey];
+  }
+
+  // Preserve the complete address and add Nigeria if not supplied.
+  if (/\bnigeria\b/i.test(normalized)) {
+    return normalized;
+  }
+
+  return `${normalized}, Lagos, Nigeria`;
+};
+
+const sanitizeAddress = (address) =>
+  normalizeAddress(address)
+    .replace(
+      /^(?:no\.?\s*|flat\s+\d+\s*,?\s*|unit\s+\d+\s*,?\s*|suite\s+\d+\s*,?\s*|block\s+[a-z0-9]+\s*,?\s*)/i,
+      ""
+    )
+    .trim();
+
+/**
+ * Geocode a pickup or destination address for Swiftbox.
+ *
+ * @param {string} address
+ * @returns {Promise<{
+ *   latitude: number,
+ *   longitude: number,
+ *   displayName: string,
+ *   precision: "EXACT"|"STREET"|"AREA",
+ *   isApproximate: boolean,
+ *   addressDetails: object|null
+ * }|null>}
  */
 export const geocodeAddress = async (address) => {
   try {
-    if (!address || typeof address !== "string") {
-      console.warn("⚠️ Invalid address supplied for geocoding");
+    if (typeof address !== "string" || !address.trim()) {
+      console.warn("Invalid address supplied for geocoding.");
       return null;
     }
 
-    const queryAddress = address.trim();
-    if (!queryAddress) return null;
+    const originalAddress = normalizeAddress(address);
 
-    // 1. Local Landmark & Hub Dictionary for smart query injection
-    const landmarkAliases = {
-      "computer village": "Computer Village, Ikeja, Lagos",
-      "trade fair": "Badagry Expressway, Trade Fair, Lagos",
-      "alaba": "Alaba International Market, Ojo, Lagos",
-      "balogun": "Balogun Market, Lagos Island, Lagos",
-      "oshodi": "Oshodi Interchange, Lagos",
-      "CMS": "CMS Bus Stop, Lagos Island, Lagos",
-      "mile 2": "Mile 2, Amuwo-Odofin, Lagos",
-      "lekki phase 1": "Lekki Phase 1, Lagos",
-    };
+    // Prevent excessively long or meaningless queries.
+    if (originalAddress.length < 3 || originalAddress.length > 300) {
+      console.warn("Address length is invalid.");
+      return null;
+    }
 
-    // 2. Direct Coordinate Anchors for unmapped micro-pockets (Guarantees accurate pricing)
-    const localAreaAnchors = {
-      okota: { latitude: 6.5056, longitude: 3.3289, name: "Okota, Isolo, Lagos, Nigeria" },
-      ago: { latitude: 6.5120, longitude: 3.3150, name: "Ago Palace Way, Okota, Lagos, Nigeria" },
-      isolo: { latitude: 6.5333, longitude: 3.3333, name: "Isolo, Lagos, Nigeria" },
-      ikeja: { latitude: 6.6018, longitude: 3.3515, name: "Ikeja, Lagos, Nigeria" },
-      lekki: { latitude: 6.4474, longitude: 3.4723, name: "Lekki Phase 1, Lagos, Nigeria" },
-      surulere: { latitude: 6.5000, longitude: 3.3500, name: "Surulere, Lagos, Nigeria" },
-      yaba: { latitude: 6.5175, longitude: 3.3841, name: "Yaba, Lagos, Nigeria" },
-      egbeda: { latitude: 6.6100, longitude: 3.2800, name: "Egbeda, Lagos, Nigeria" },
-      festac: { latitude: 6.4636, longitude: 3.2831, name: "Festac Town, Lagos, Nigeria" },
-      oshodi: { latitude: 6.5539, longitude: 3.3456, name: "Oshodi, Lagos, Nigeria" }
-    };
+    const queries = [buildQuery(originalAddress)];
+    const cleaned = sanitizeAddress(originalAddress);
 
-    const determinePrecision = (result) => {
-      const details = result.address || {};
-      const resultClass = result.class || "";
+    if (cleaned && cleaned !== originalAddress) {
+      queries.push(buildQuery(cleaned));
+    }
 
-      if (details.house_number || details.building || ["building", "amenity", "shop", "office"].includes(resultClass)) {
-        return { precision: "EXACT", isApproximate: false };
-      }
+    // Remove duplicate retry queries.
+    const uniqueQueries = [...new Set(queries)];
 
-      if (details.road || details.pedestrian || details.footway || ["highway"].includes(resultClass)) {
-        return { precision: "STREET", isApproximate: false };
-      }
-
-      return { precision: "AREA", isApproximate: true };
-    };
-
-    const fetchNominatim = async (queryString, useBoundingBox = true) => {
-      let formattedQuery = queryString;
-      
-      const lowerQuery = queryString.toLowerCase();
-      for (const [key, val] of Object.entries(landmarkAliases)) {
-        if (lowerQuery.includes(key)) {
-          formattedQuery = val;
-          break;
-        }
-      }
-
-      if (!formattedQuery.toLowerCase().includes("nigeria")) {
-        formattedQuery = `${formattedQuery}, Nigeria`;
-      }
-
-      console.log("🔍 Querying Nominatim for:", formattedQuery);
-
+    for (const query of uniqueQueries) {
       const params = new URLSearchParams({
-        format: "json",
-        q: formattedQuery,
+        format: "jsonv2",
+        q: query,
         countrycodes: "ng",
         limit: "1",
         addressdetails: "1",
+        viewbox: LAGOS_VIEWBOX,
+        bounded: "1",
       });
 
-      if (useBoundingBox) {
-        params.append("viewbox", "2.68,6.35,4.25,6.85");
-        params.append("bounded", "1");
-      }
+      console.info("Geocoding address:", query);
 
       const response = await fetch(
-        `https://nominatim.openstreetmap.org/search?${params.toString()}`,
+        `${NOMINATIM_URL}?${params.toString()}`,
         {
           method: "GET",
           headers: {
             Accept: "application/json",
-            "User-Agent": "CourierX Delivery Platform (contact@courierx.com)",
+            // Replace with a real support email and your actual product name.
+            "User-Agent": "Swiftbox Delivery Platform (support@yourdomain.com)",
           },
+          signal: AbortSignal.timeout(8000),
         }
       );
 
       if (!response.ok) {
-        console.error("❌ Nominatim request failed:", response.status, response.statusText);
+        console.error(
+          "Nominatim request failed:",
+          response.status,
+          response.statusText
+        );
+
+        // Do not turn an API outage into a guessed fare.
         return null;
       }
 
-      const data = await response.json();
-      if (!Array.isArray(data) || data.length === 0) return null;
+      const results = await response.json();
 
-      const result = data[0];
+      if (!Array.isArray(results) || results.length === 0) {
+        continue;
+      }
+
+      const result = results[0];
       const latitude = Number(result.lat);
       const longitude = Number(result.lon);
+      const addressDetails = result.address ?? {};
 
-      if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+      if (!hasValidCoordinates(latitude, longitude)) {
+        console.warn("Geocoder returned invalid coordinates.");
+        continue;
+      }
+
+      // Reject results outside the broad Lagos bounding box.
+      // This is a guard, not a precise delivery-zone boundary.
+      if (!isInsideLagosBounds(latitude, longitude)) {
+        console.warn("Geocoder result is outside the Lagos bounds.");
+        continue;
+      }
+
+      // Require the geocoder to identify Nigeria.
+      const countryCode = String(
+        addressDetails.country_code ?? ""
+      ).toLowerCase();
+
+      if (countryCode !== "ng") {
+        console.warn("Geocoder result is not confirmed as Nigerian.");
+        continue;
+      }
 
       const { precision, isApproximate } = determinePrecision(result);
 
       return {
         latitude,
         longitude,
-        displayName: result.display_name,
+        displayName: String(result.display_name ?? query),
         precision,
         isApproximate,
-        addressDetails: result.address || null,
+        addressDetails,
       };
-    };
-
-    // STAGE 1: Exact Query with Bounding Box
-    let geocodeResult = await fetchNominatim(queryAddress, true);
-
-    // STAGE 2: If bounded query fails, try unrestricted search across Nigeria
-    if (!geocodeResult) {
-      console.log("⚠️ Bounded search failed. Trying nationwide search for:", queryAddress);
-      geocodeResult = await fetchNominatim(queryAddress, false);
     }
 
-    // STAGE 3: Address Sanitization & Structural Cleanup
-    if (!geocodeResult) {
-      console.log("⚠️ Standard search failed. Attempting deep string cleanup for:", queryAddress);
-
-      const cleanedAddress = queryAddress
-        .replace(/^(no\.?\s*|flat\s*\d+\s*,?|unit\s*\d+\s*,?|suite\s*\d+\s*,?|block\s*[a-z0-9]+\s*,?)?/i, "")
-        .replace(/^\d+[a-z]?[\s,]+/i, "")
-        .replace(/^(\d+)([a-zA-Z]+)/, "$2") 
-        .trim();
-
-      if (cleanedAddress && cleanedAddress !== queryAddress) {
-        console.log("🔍 Retrying Nominatim with sanitized street address:", cleanedAddress);
-        geocodeResult = await fetchNominatim(cleanedAddress, true);
-      }
-    }
-
-    // STAGE 4: Instant Micro-Area Anchor Fallback (Prevents pricing errors & network timeouts)
-    if (!geocodeResult) {
-      const lower = queryAddress.toLowerCase();
-      let matchedAnchor = null;
-
-      for (const [key, anchorData] of Object.entries(localAreaAnchors)) {
-        if (lower.includes(key)) {
-          matchedAnchor = anchorData;
-          break;
-        }
-      }
-
-      if (matchedAnchor) {
-        console.log(`📍 Using local coordinate anchor for zone: ${matchedAnchor.name}`);
-        geocodeResult = {
-          latitude: matchedAnchor.latitude,
-          longitude: matchedAnchor.longitude,
-          displayName: matchedAnchor.name,
-          precision: "AREA",
-          isApproximate: true,
-          addressDetails: { suburb: matchedAnchor.name, city: "Lagos" }
-        };
-      } else {
-        // Ultimate fallback to central Lagos coordinates to maintain delivery pricing continuity
-        console.warn("⚠️ Unrecognized zone. Falling back to default Lagos anchor.");
-        geocodeResult = {
-          latitude: 6.5244,
-          longitude: 3.3792,
-          displayName: "Lagos, Nigeria",
-          precision: "AREA",
-          isApproximate: true,
-          addressDetails: { city: "Lagos" }
-        };
-      }
-    }
-
-    return geocodeResult;
-
+    // Crucially: no area-anchor fallback and no central-Lagos fallback.
+    console.warn("Could not verify the supplied address.");
+    return null;
   } catch (error) {
-    console.error("❌ Geocoding system error:", error);
+    console.error("Geocoding service error:", error);
     return null;
   }
 };

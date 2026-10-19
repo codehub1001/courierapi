@@ -203,8 +203,8 @@ model RiderProfile {
   // RIDER VERIFICATION
   // ==============================
 
-  ninNumber   String? @unique
-  bvnNumber   String? @unique
+  ninNumber String? @unique
+  bvnNumber String? @unique
 
   passportUrl String?
   selfieUrl   String?
@@ -288,7 +288,7 @@ model Delivery {
   pickupLongitude    Float?
   recipientLatitude  Float?
   recipientLongitude Float?
-  assignedAt DateTime?
+  assignedAt         DateTime?
 
   packageType          String
   packageWeight        String?
@@ -446,10 +446,10 @@ model Notification {
 
   deliveryId String?
 
-  title     String
-  message   String
-  isRead    Boolean @default(false)
-  type      String?
+  title   String
+  message String
+  isRead  Boolean @default(false)
+  type    String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -467,13 +467,13 @@ model Referral {
   id String @id @default(cuid())
 
   referrerId String
-  referrer   User @relation("UserReferrals", fields: [referrerId], references: [id], onDelete: Cascade)
+  referrer   User   @relation("UserReferrals", fields: [referrerId], references: [id], onDelete: Cascade)
 
   referredId String @unique
-  referred   User @relation("UserReferred", fields: [referredId], references: [id], onDelete: Cascade)
+  referred   User   @relation("UserReferred", fields: [referredId], references: [id], onDelete: Cascade)
 
   status       ReferralStatus @default(PENDING)
-  rewardAmount Float @default(0.0)
+  rewardAmount Float          @default(0.0)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -531,12 +531,12 @@ model WhatsAppConversation {
   // Optional CourierX user
   // NULL when the person is only a recipient
   userId String?
-  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   // Optional delivery
   // NULL when there is no delivery associated yet
   deliveryId String?
-  delivery Delivery? @relation(fields: [deliveryId], references: [id], onDelete: SetNull)
+  delivery   Delivery? @relation(fields: [deliveryId], references: [id], onDelete: SetNull)
 
   messages WhatsAppMessage[]
 
@@ -561,7 +561,7 @@ model WhatsAppMessage {
   whatsappMessageId String @unique
 
   conversationId String
-  conversation WhatsAppConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  conversation   WhatsAppConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
   direction WhatsAppMessageDirection
 
