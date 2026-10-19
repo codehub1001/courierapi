@@ -1,19 +1,17 @@
 /**
  * utils/geocoding.js
  *
- * Swiftbox Lagos geocoding service.
+ * Swiftbox Lagos geocoding service (Production Ready).
  *
  * - No fabricated coordinates.
- * - Normalizes informal Lagos addresses.
- * - Tries multiple search variations.
- * - Validates country and geographic bounds.
+ * - Normalizes informal Lagos addresses and handles typos/missing states.
+ * - Tries multiple search variations (exact -> stripped unit -> core street/area).
+ * - Validates country, bounding box, and geographic coordinates.
  * - Rejects conflicting house numbers.
- * - Prefers exact building matches over streets and areas.
- * - Logs search candidates and API errors.
+ * - Prioritizes exact building matches, falling back gracefully to street or area level.
  */
 
-const NOMINATIM_URL =
-  "https://nominatim.openstreetmap.org/search";
+const NOMINATIM_URL = "https://nominatim.openstreetmap.org/search";
 
 const LAGOS_BOUNDS = {
   minLat: 6.3,
@@ -31,14 +29,16 @@ const USER_AGENT =
 const LANDMARK_ALIASES = {
   "computer village": "Computer Village, Ikeja, Lagos, Nigeria",
   "trade fair": "Trade Fair Complex, Lagos, Nigeria",
-  alaba: "Alaba International Market, Ojo, Lagos, Nigeria",
-  balogun: "Balogun Market, Lagos Island, Nigeria",
-  oshodi: "Oshodi, Lagos, Nigeria",
-  cms: "CMS Bus Stop, Lagos Island, Nigeria",
+  "alaba": "Alaba International Market, Ojo, Lagos, Nigeria",
+  "balogun": "Balogun Market, Lagos Island, Nigeria",
+  "oshodi": "Oshodi, Lagos, Nigeria",
+  "cms": "CMS Bus Stop, Lagos Island, Nigeria",
   "mile 2": "Mile 2, Amuwo-Odofin, Lagos, Nigeria",
   "lekki phase 1": "Lekki Phase 1, Lagos, Nigeria",
   "mko abiola gardens": "MKO Abiola Gardens, Ikeja, Lagos, Nigeria",
   "mko abiola gardens estate": "MKO Abiola Gardens, Ikeja, Lagos, Nigeria",
+  "jemtok": "Jemtok Street, Okota, Isolo, Lagos, Nigeria",
+  "jemtok okota": "Jemtok Street, Okota, Isolo, Lagos, Nigeria",
 };
 
 const normalizeAddress = (value) =>
@@ -72,7 +72,6 @@ const normalizeHouseNumber = (value) =>
     .trim();
 
 const extractHouseNumber = (address) => {
-  // Avoid treating estate building/unit letters (like 14b in an estate context) as strict street house numbers if an estate keyword is present
   if (/\b(estate|gardens|court|plaza|mall|complex)\b/i.test(address)) {
     return null;
   }
@@ -114,35 +113,45 @@ const buildQuery = (address) => {
 
   if (alias) return alias;
 
-  if (/\bnigeria\b/i.test(normalized)) {
-    return normalized;
+  // Fix common typos like 'agos' or missing city contexts
+  let cleaned = normalized
+    .replace(/\b(agos)\b/gi, "Lagos")
+    .replace(/\b(lag)\b/gi, "Lagos");
+
+  if (/\bnigeria\b/i.test(cleaned)) {
+    return cleaned;
   }
 
-  if (/\blagos\b/i.test(normalized)) {
-    return `${normalized}, Nigeria`;
+  if (/\blagos\b/i.test(cleaned)) {
+    return `${cleaned}, Nigeria`;
   }
 
-  return `${normalized}, Lagos, Nigeria`;
+  return `${cleaned}, Lagos, Nigeria`;
 };
 
 const buildQueries = (address) => {
   const normalized = normalizeAddress(address);
   const withoutLeadingUnit = removeLeadingUnit(normalized);
+  
   const withoutHouseNumber = normalized.replace(
     /^\s*(?:no\.?\s*)?\d+[a-z]?(?:\/\d+[a-z]?)?\s*,?\s*/i,
     ""
   );
 
+  // Extract core street/area tokens for fallback matching
+  const tokens = withoutHouseNumber.split(',')[0].replace(/\b\d+\b/g, "").trim();
+
   const variants = [
     normalized,
     withoutLeadingUnit,
     withoutHouseNumber,
+    tokens ? `${tokens}, Lagos, Nigeria` : null,
   ];
 
   return [
     ...new Set(
       variants
-        .map((value) => buildQuery(value))
+        .map((value) => (value ? buildQuery(value) : null))
         .filter(Boolean)
     ),
   ];
@@ -163,50 +172,24 @@ const determinePrecision = (result) => {
   const hasHouseNumber = Boolean(details.house_number);
 
   if (hasRoad && hasHouseNumber) {
-    return {
-      precision: "EXACT",
-      isApproximate: false,
-    };
+    return { precision: "EXACT", isApproximate: false };
   }
 
-  if (
-    hasRoad ||
-    String(result.class ?? "").toLowerCase() === "highway"
-  ) {
-    return {
-      precision: "STREET",
-      isApproximate: true,
-    };
+  if (hasRoad || String(result.class ?? "").toLowerCase() === "highway") {
+    return { precision: "STREET", isApproximate: true };
   }
 
-  return {
-    precision: "AREA",
-    isApproximate: true,
-  };
+  return { precision: "AREA", isApproximate: true };
 };
 
-const convertResult = (
-  result,
-  requestedHouseNumber,
-  query
-) => {
+const convertResult = (result, requestedHouseNumber, query) => {
   const latitude = Number(result.lat);
   const longitude = Number(result.lon);
   const details = result.address ?? {};
 
-  if (!hasValidCoordinates(latitude, longitude)) {
-    return null;
-  }
-
-  if (!isInsideLagosBounds(latitude, longitude)) {
-    return null;
-  }
-
-  if (
-    String(details.country_code ?? "").toLowerCase() !== "ng"
-  ) {
-    return null;
-  }
+  if (!hasValidCoordinates(latitude, longitude)) return null;
+  if (!isInsideLagosBounds(latitude, longitude)) return null;
+  if (String(details.country_code ?? "").toLowerCase() !== "ng") return null;
 
   const resultHouseNumber = details.house_number;
 
@@ -219,8 +202,7 @@ const convertResult = (
     }
   }
 
-  const { precision, isApproximate } =
-    determinePrecision(result);
+  const { precision, isApproximate } = determinePrecision(result);
 
   return {
     latitude,
@@ -249,11 +231,6 @@ const fetchNominatim = async (query, useBounds = true) => {
 
   const url = `${NOMINATIM_URL}?${params.toString()}`;
 
-  console.info(
-    `[Geocoding] ${useBounds ? "Lagos search" : "Broader search"}:`,
-    query
-  );
-
   const response = await fetch(url, {
     method: "GET",
     headers: {
@@ -268,15 +245,9 @@ const fetchNominatim = async (query, useBounds = true) => {
   }
 
   const results = await response.json();
-
   if (!Array.isArray(results)) {
     throw new Error("Nominatim returned an invalid response.");
   }
-
-  console.info(
-    `[Geocoding] ${results.length} candidate(s) found for:`,
-    query
-  );
 
   return results;
 };
@@ -289,27 +260,20 @@ export const geocodeAddress = async (address) => {
 
   const originalAddress = normalizeAddress(address);
 
-  if (
-    originalAddress.length < 3 ||
-    originalAddress.length > 300
-  ) {
+  if (originalAddress.length < 3 || originalAddress.length > 300) {
     console.warn("[Geocoding] Invalid address length.");
     return null;
   }
 
-  const requestedHouseNumber =
-    extractHouseNumber(originalAddress);
-
+  const requestedHouseNumber = extractHouseNumber(originalAddress);
   const queries = buildQueries(originalAddress);
 
   let hadRequestError = false;
   let bestApproximateMatch = null;
   let streetMatch = null;
 
-  console.info(
-    "[Geocoding] Starting address verification:",
-    originalAddress
-  );
+  console.info("[Geocoding] Starting address verification:", originalAddress);
+  console.info("[Geocoding] Generated search variations:", queries);
 
   for (const query of queries) {
     for (const useBounds of [true, false]) {
@@ -320,30 +284,19 @@ export const geocodeAddress = async (address) => {
       } catch (error) {
         hadRequestError = true;
         console.error(
-          `[Geocoding] ${
-            useBounds ? "Lagos" : "Broader"
-          } search failed:`,
+          `[Geocoding] ${useBounds ? "Lagos" : "Broader"} search failed for query [${query}]:`,
           error?.message ?? error
         );
         continue;
       }
 
       for (const result of results) {
-        const location = convertResult(
-          result,
-          requestedHouseNumber,
-          query
-        );
+        const location = convertResult(result, requestedHouseNumber, query);
 
-        if (!location) {
-          continue;
-        }
+        if (!location) continue;
 
         if (location.precision === "EXACT") {
-          console.info(
-            "[Geocoding] Exact location matched:",
-            location.displayName
-          );
+          console.info("[Geocoding] Exact location matched:", location.displayName);
           return location;
         }
 
@@ -359,35 +312,23 @@ export const geocodeAddress = async (address) => {
   }
 
   if (streetMatch) {
-    console.info(
-      "[Geocoding] Street-level location matched:",
-      streetMatch.displayName
-    );
+    console.info("[Geocoding] Street-level location matched:", streetMatch.displayName);
     return streetMatch;
   }
 
   if (bestApproximateMatch) {
-    console.warn(
-      "[Geocoding] Only an approximate location was found:",
-      {
-        address: originalAddress,
-        precision: bestApproximateMatch.precision,
-        displayName: bestApproximateMatch.displayName,
-      }
-    );
+    console.warn("[Geocoding] Only an approximate location was found:", {
+      address: originalAddress,
+      precision: bestApproximateMatch.precision,
+      displayName: bestApproximateMatch.displayName,
+    });
     return bestApproximateMatch;
   }
 
   if (hadRequestError) {
-    console.error(
-      "[Geocoding] One or more searches failed due to API or network errors."
-    );
+    console.error("[Geocoding] One or more searches failed due to API or network errors.");
   }
 
-  console.warn(
-    "[Geocoding] No acceptable Lagos location found:",
-    originalAddress
-  );
-
+  console.warn("[Geocoding] No acceptable Lagos location found:", originalAddress);
   return null;
 };
